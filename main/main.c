@@ -14,6 +14,7 @@
 #include "cat_client.h"
 #include "config_store.h"
 #include "mapping_engine.h"
+#include "http_server.h"
 
 static const char *TAG = "main";
 
@@ -39,6 +40,9 @@ static void usb_control_cb(
 
     // Dispatch to mapping engine
     mapping_engine_on_control(name, control_type, control_index, old_value, new_value);
+
+    // Notify WebSocket clients
+    http_server_notify_control(name, control_type, old_value, new_value);
 }
 
 // TCI state change callback - update LED
@@ -54,9 +58,11 @@ static void tci_state_cb(tci_state_t new_state)
     case TCI_STATE_READY:
         ESP_LOGI(TAG, "TCI: Thetis ready");
         status_led_set(LED_CYAN);
+        http_server_notify_status();
         break;
     case TCI_STATE_DISCONNECTED:
         ESP_LOGW(TAG, "TCI: disconnected");
+        http_server_notify_status();
         if (usb_dj_host_is_connected()) {
             status_led_set(LED_PURPLE);
         } else {
@@ -78,9 +84,11 @@ static void cat_state_cb(cat_state_t new_state)
     case CAT_STATE_CONNECTED:
         ESP_LOGI(TAG, "CAT: connected");
         status_led_set(LED_CYAN);
+        http_server_notify_status();
         break;
     case CAT_STATE_DISCONNECTED:
         ESP_LOGW(TAG, "CAT: disconnected");
+        http_server_notify_status();
         if (usb_dj_host_is_connected()) {
             status_led_set(LED_PURPLE);
         }
@@ -94,6 +102,7 @@ static void cat_state_cb(cat_state_t new_state)
 static void tci_notify_cb(const char *cmd, const char *args)
 {
     ESP_LOGD(TAG, "TCI notify: %s:%s", cmd, args ? args : "");
+    http_server_notify_radio();
 }
 
 // CAT response callback
@@ -203,7 +212,11 @@ void app_main(void)
         start_radio_client();
     }
 
-    ESP_LOGI(TAG, "System ready. Free heap: %lu bytes", esp_get_free_heap_size());
+    // Start HTTP server (REST API + WebSocket + static files)
+    ret = http_server_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP server init failed: %s", esp_err_to_name(ret));
+    }
 
-    // TODO Phase 6: Start HTTP server
+    ESP_LOGI(TAG, "System ready. Free heap: %lu bytes", esp_get_free_heap_size());
 }

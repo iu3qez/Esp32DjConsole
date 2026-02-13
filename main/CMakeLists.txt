@@ -9,6 +9,7 @@ idf_component_register(
         "cat_client.c"
         "config_store.c"
         "mapping_engine.c"
+        "http_server.c"
     INCLUDE_DIRS
         "."
     REQUIRES
@@ -21,4 +22,5 @@ idf_component_register(
         esp_http_server
         json
         led_strip
+        spiffs
 )
