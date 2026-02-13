@@ -1,0 +1,35 @@
+# ESP-IDF build
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.svelte-kit/
+
+# Generated files
+main/svelteesp32.h
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug
+*.log
+
+# Thoughts/handoffs (build workflow artifacts)
+thoughts/
+
+# TLDR cache
+.tldr/
+.tldrignore
