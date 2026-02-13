@@ -34,8 +34,16 @@ if [ ! -d frontend/node_modules ]; then
     (cd frontend && npm install)
 fi
 (cd frontend && npm run build)
+
+# Pre-compress assets with gzip for faster serving
+echo "Compressing assets with gzip..."
+for f in build/www/assets/*.js build/www/assets/*.css; do
+    [ -f "$f" ] && gzip -9 -k -f "$f"
+done
+gzip -9 -k -f build/www/index.html
+
 echo -e "${GREEN}Frontend built -> build/www/${NC}"
-ls -lh build/www/index.html build/www/assets/* 2>/dev/null
+ls -lh build/www/index.html* build/www/assets/* 2>/dev/null
 
 # Step 2: Build firmware (includes SPIFFS image generation via CMake)
 echo -e "\n${GREEN}[2/3] Building firmware + SPIFFS image...${NC}"
