@@ -5,6 +5,7 @@ idf_component_register(
         "status_led.c"
         "usb_dj_host.c"
         "usb_debug.c"
+        "tci_client.c"
     INCLUDE_DIRS
         "."
     REQUIRES
