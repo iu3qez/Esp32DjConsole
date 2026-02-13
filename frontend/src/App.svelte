@@ -1,6 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import { initStores, wsConnected } from './lib/stores.js';
+  import { toasts, dismissToast } from './lib/toast.js';
+  import Toast from './lib/Toast.svelte';
   import Dashboard from './pages/Dashboard.svelte';
   import Mappings from './pages/Mappings.svelte';
   import Config from './pages/Config.svelte';
@@ -15,10 +17,10 @@
 
   let active = $state('dashboard');
   let connected = $state(false);
+  let toastList = $state([]);
 
-  $effect(() => {
-    return wsConnected.subscribe(v => connected = v);
-  });
+  $effect(() => { return wsConnected.subscribe(v => connected = v); });
+  $effect(() => { return toasts.subscribe(v => toastList = v); });
 
   onMount(() => { initStores(); });
 </script>
@@ -44,6 +46,11 @@
     {/if}
   {/each}
 </main>
+
+{#each toastList as t (t.id)}
+  <Toast message={t.message} type={t.type} duration={t.duration}
+    onclose={() => dismissToast(t.id)} />
+{/each}
 
 <style>
   :global(body) {

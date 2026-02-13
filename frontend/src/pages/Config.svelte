@@ -1,6 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import { getConfig, putConfig } from '../lib/api.js';
+  import { success, error } from '../lib/toast.js';
+  import ConfirmDialog from '../lib/ConfirmDialog.svelte';
 
   let cfg = $state({
     wifi_ssid: '', wifi_pass: '', wifi_pass_set: false,
@@ -10,15 +12,19 @@
     debug_level: 1,
   });
   let saving = $state(false);
-  let msg = $state('');
   let newPass = $state('');
+  let showConfirm = $state(false);
 
   onMount(async () => {
-    try { cfg = { ...cfg, ...await getConfig() }; } catch (e) { msg = 'Load failed: ' + e.message; }
+    try { cfg = { ...cfg, ...await getConfig() }; }
+    catch (e) { error('Failed to load config: ' + e.message); }
   });
 
-  async function save() {
-    saving = true; msg = '';
+  function requestSave() { showConfirm = true; }
+
+  async function doSave() {
+    showConfirm = false;
+    saving = true;
     const update = {
       wifi_ssid: cfg.wifi_ssid,
       protocol: cfg.protocol,
@@ -31,9 +37,13 @@
     if (newPass) update.wifi_pass = newPass;
     try {
       const res = await putConfig(update);
-      msg = res.restart_required ? 'Saved. WiFi restarting...' : 'Saved.';
+      if (res.restart_required) {
+        success('Saved. Device will restart to apply changes.');
+      } else {
+        success('Configuration saved.');
+      }
       newPass = '';
-    } catch (e) { msg = 'Save failed: ' + e.message; }
+    } catch (e) { error('Save failed: ' + e.message); }
     saving = false;
   }
 </script>
@@ -82,9 +92,16 @@
   </label>
 </div>
 
-{#if msg}<div class="msg">{msg}</div>{/if}
+<button class="save" onclick={requestSave} disabled={saving}>{saving ? 'Saving...' : 'Save Configuration'}</button>
 
-<button class="save" onclick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Configuration'}</button>
+{#if showConfirm}
+  <ConfirmDialog
+    title="Save Configuration"
+    message="Changing WiFi or radio settings may require a device restart. Continue?"
+    onconfirm={doSave}
+    oncancel={() => showConfirm = false}
+  />
+{/if}
 
 <style>
   h2 { font-size: 0.9rem; color: #e94560; margin: 1rem 0 0.5rem; }
@@ -99,7 +116,6 @@
     display: flex; flex-direction: column; gap: 0.4rem;
   }
   legend { color: #888; font-size: 0.75rem; padding: 0 0.3rem; }
-  .msg { margin-top: 0.75rem; padding: 0.4rem; background: #16213e; border-radius: 4px; color: #52b788; font-size: 0.8rem; }
   .save {
     margin-top: 1rem; width: 100%; padding: 0.6rem;
     background: #0f3460; color: #e0e0e0; border: none;

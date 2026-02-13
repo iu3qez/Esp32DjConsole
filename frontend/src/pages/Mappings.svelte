@@ -1,6 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import { getMappings, putMappings, resetMappings } from '../lib/api.js';
+  import { success, error } from '../lib/toast.js';
+  import ConfirmDialog from '../lib/ConfirmDialog.svelte';
 
   const ACTION_NAMES = [
     'None', 'VFO A Step', 'VFO B Step', 'VFO A Direct', 'Band Select',
@@ -12,11 +14,12 @@
 
   let mappings = $state([]);
   let saving = $state(false);
-  let msg = $state('');
   let filter = $state('');
+  let showResetConfirm = $state(false);
 
   onMount(async () => {
-    try { mappings = await getMappings(); } catch (e) { msg = 'Load failed: ' + e.message; }
+    try { mappings = await getMappings(); }
+    catch (e) { error('Failed to load mappings: ' + e.message); }
   });
 
   function filtered() {
@@ -26,41 +29,42 @@
   }
 
   async function save() {
-    saving = true; msg = '';
+    saving = true;
     try {
       const res = await putMappings(mappings);
-      msg = `Saved (${res.applied} mappings)`;
-    } catch (e) { msg = 'Save failed: ' + e.message; }
+      success(`Saved ${res.applied} mappings`);
+    } catch (e) { error('Save failed: ' + e.message); }
     saving = false;
   }
 
-  async function reset() {
-    if (!confirm('Reset all mappings to defaults?')) return;
+  async function doReset() {
+    showResetConfirm = false;
     try {
       await resetMappings();
       mappings = await getMappings();
-      msg = 'Reset to defaults';
-    } catch (e) { msg = 'Reset failed: ' + e.message; }
+      success('Mappings reset to defaults');
+    } catch (e) { error('Reset failed: ' + e.message); }
   }
 
-  function updateAction(idx, val) {
-    mappings[idx].action = parseInt(val);
-  }
-  function updateParam(idx, val) {
-    mappings[idx].param_int = parseInt(val) || 0;
-  }
-  function updateParamStr(idx, val) {
-    mappings[idx].param_str = val;
-  }
+  function updateAction(idx, val) { mappings[idx].action = parseInt(val); }
+  function updateParam(idx, val) { mappings[idx].param_int = parseInt(val) || 0; }
+  function updateParamStr(idx, val) { mappings[idx].param_str = val; }
 </script>
 
 <div class="toolbar">
   <input type="text" placeholder="Filter controls..." bind:value={filter} />
   <button onclick={save} disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>
-  <button class="reset" onclick={reset}>Reset</button>
+  <button class="reset" onclick={() => showResetConfirm = true}>Reset</button>
 </div>
 
-{#if msg}<div class="msg">{msg}</div>{/if}
+{#if showResetConfirm}
+  <ConfirmDialog
+    title="Reset Mappings"
+    message="This will replace all mappings with the factory defaults. This cannot be undone."
+    onconfirm={doReset}
+    oncancel={() => showResetConfirm = false}
+  />
+{/if}
 
 <div class="table-wrap">
   <table>
@@ -104,8 +108,6 @@
   .toolbar button:hover { background: #1a4a8a; }
   .toolbar button.reset { background: #5c1a1a; }
   .toolbar button.reset:hover { background: #8a2a2a; }
-
-  .msg { padding: 0.4rem; background: #16213e; border-radius: 4px; margin-bottom: 0.5rem; color: #52b788; font-size: 0.8rem; }
 
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
