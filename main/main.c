@@ -109,6 +109,7 @@ static void tci_notify_cb(const char *cmd, const char *args)
 static void cat_response_cb(const char *cmd, const char *value)
 {
     ESP_LOGD(TAG, "CAT response: %s = %s", cmd, value);
+    http_server_notify_radio();
 }
 
 // Start TCI or CAT client based on NVS config
@@ -118,6 +119,7 @@ static void start_radio_client(void)
     config_get_str(CFG_KEY_PROTOCOL, proto, sizeof(proto));
 
     bool use_tci = (strcmp(proto, "cat") != 0);
+    mapping_engine_set_protocol(use_tci);
 
     if (use_tci) {
         char host[64] = {0};

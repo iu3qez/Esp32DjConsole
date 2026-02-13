@@ -1,5 +1,4 @@
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
@@ -318,6 +317,7 @@ static esp_err_t api_config_put_handler(httpd_req_t *req)
     }
 
     bool need_wifi_restart = false;
+    bool need_radio_restart = false;
 
     // WiFi SSID
     cJSON *item = cJSON_GetObjectItem(root, "wifi_ssid");
@@ -337,6 +337,11 @@ static esp_err_t api_config_put_handler(httpd_req_t *req)
     item = cJSON_GetObjectItem(root, "protocol");
     if (item && cJSON_IsString(item)) {
         if (strcmp(item->valuestring, "tci") == 0 || strcmp(item->valuestring, "cat") == 0) {
+            char old_proto[8] = "tci";
+            config_get_str(CFG_KEY_PROTOCOL, old_proto, sizeof(old_proto));
+            if (strcmp(old_proto, item->valuestring) != 0) {
+                need_radio_restart = true;
+            }
             config_set_str(CFG_KEY_PROTOCOL, item->valuestring);
             mapping_engine_set_protocol(strcmp(item->valuestring, "tci") == 0);
         }
@@ -346,20 +351,24 @@ static esp_err_t api_config_put_handler(httpd_req_t *req)
     item = cJSON_GetObjectItem(root, "tci_host");
     if (item && cJSON_IsString(item)) {
         config_set_str(CFG_KEY_TCI_HOST, item->valuestring);
+        need_radio_restart = true;
     }
     item = cJSON_GetObjectItem(root, "tci_port");
     if (item && cJSON_IsNumber(item)) {
         config_set_u16(CFG_KEY_TCI_PORT, (uint16_t)item->valueint);
+        need_radio_restart = true;
     }
 
     // CAT host/port
     item = cJSON_GetObjectItem(root, "cat_host");
     if (item && cJSON_IsString(item)) {
         config_set_str(CFG_KEY_CAT_HOST, item->valuestring);
+        need_radio_restart = true;
     }
     item = cJSON_GetObjectItem(root, "cat_port");
     if (item && cJSON_IsNumber(item)) {
         config_set_u16(CFG_KEY_CAT_PORT, (uint16_t)item->valueint);
+        need_radio_restart = true;
     }
 
     // Debug level
@@ -375,7 +384,7 @@ static esp_err_t api_config_put_handler(httpd_req_t *req)
     // Response
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddBoolToObject(resp, "restart_required", need_wifi_restart);
+    cJSON_AddBoolToObject(resp, "restart_required", need_wifi_restart || need_radio_restart);
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
 
@@ -602,7 +611,7 @@ static esp_err_t static_file_handler(httpd_req_t *req)
 static void on_sock_close(httpd_handle_t hd, int sockfd)
 {
     ws_remove_client(sockfd);
-    close(sockfd);
+    // ESP-IDF httpd closes the socket internally - don't double-close
 }
 
 // ----- SPIFFS mount/unmount -----
