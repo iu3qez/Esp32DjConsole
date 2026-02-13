@@ -58,7 +58,6 @@ esp_err_t status_led_init(void)
         .strip_gpio_num = LED_GPIO,
         .max_leds = LED_COUNT,
         .led_model = LED_MODEL_WS2812,
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
         .flags.invert_out = false,
     };
 
