@@ -2,12 +2,15 @@
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
+#include "lwip/sockets.h"
+#include "lwip/dns.h"
 
 static const char *TAG = "wifi_mgr";
 
@@ -26,6 +29,7 @@ static const char *TAG = "wifi_mgr";
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_count = 0;
 static bool s_connected = false;
+static bool s_ap_mode = false;
 
 static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
@@ -103,6 +107,82 @@ static esp_err_t start_sta(const char *ssid, const char *password)
     return ESP_FAIL;
 }
 
+// ----- Captive portal DNS server -----
+// Responds to all DNS queries with the AP's own IP (192.168.4.1).
+// This triggers captive portal detection on phones/laptops.
+
+static void dns_hijack_task(void *pvParameters)
+{
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "DNS socket create failed");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    struct sockaddr_in srv = {
+        .sin_family = AF_INET,
+        .sin_port = htons(53),
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+    };
+
+    if (bind(sock, (struct sockaddr *)&srv, sizeof(srv)) < 0) {
+        ESP_LOGE(TAG, "DNS bind failed");
+        close(sock);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Captive portal DNS started");
+
+    uint8_t buf[512];
+    struct sockaddr_in client;
+    socklen_t client_len;
+
+    while (1) {
+        client_len = sizeof(client);
+        int len = recvfrom(sock, buf, sizeof(buf), 0,
+                          (struct sockaddr *)&client, &client_len);
+        if (len < 12) continue;  // Too short for DNS header
+
+        // Build minimal DNS response: copy query, set response flags, add A record
+        // DNS header: ID(2) Flags(2) QDCOUNT(2) ANCOUNT(2) NSCOUNT(2) ARCOUNT(2)
+        buf[2] = 0x81;  // QR=1 (response), AA=1 (authoritative)
+        buf[3] = 0x80;  // RA=1
+        buf[6] = 0x00;  // ANCOUNT = 1
+        buf[7] = 0x01;
+
+        // Find end of question section (skip QNAME + QTYPE + QCLASS)
+        int pos = 12;
+        while (pos < len && buf[pos] != 0) {
+            pos += buf[pos] + 1;  // Skip label
+        }
+        pos += 5;  // Skip null terminator + QTYPE(2) + QCLASS(2)
+
+        if (pos + 16 > (int)sizeof(buf)) continue;
+
+        // Append answer: pointer to name + TYPE A + CLASS IN + TTL + RDLENGTH + IP
+        buf[pos++] = 0xC0;  // Name pointer to offset 12 (question name)
+        buf[pos++] = 0x0C;
+        buf[pos++] = 0x00;  // TYPE A
+        buf[pos++] = 0x01;
+        buf[pos++] = 0x00;  // CLASS IN
+        buf[pos++] = 0x01;
+        buf[pos++] = 0x00;  // TTL = 60 seconds
+        buf[pos++] = 0x00;
+        buf[pos++] = 0x00;
+        buf[pos++] = 0x3C;
+        buf[pos++] = 0x00;  // RDLENGTH = 4
+        buf[pos++] = 0x04;
+        buf[pos++] = 192;   // 192.168.4.1 (default AP IP)
+        buf[pos++] = 168;
+        buf[pos++] = 4;
+        buf[pos++] = 1;
+
+        sendto(sock, buf, pos, 0, (struct sockaddr *)&client, client_len);
+    }
+}
+
 static esp_err_t start_ap(void)
 {
     ESP_LOGI(TAG, "Starting AP mode, SSID: %s", AP_SSID);
@@ -125,6 +205,11 @@ static esp_err_t start_ap(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    s_ap_mode = true;
+
+    // Start captive portal DNS hijack
+    xTaskCreate(dns_hijack_task, "dns_hijack", 4096, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "AP started. Connect to '%s' (pass: '%s') and configure WiFi via web GUI",
              AP_SSID, AP_PASS);
@@ -173,4 +258,9 @@ esp_err_t wifi_manager_set_credentials(const char *ssid, const char *password)
 bool wifi_manager_is_connected(void)
 {
     return s_connected;
+}
+
+bool wifi_manager_is_ap_mode(void)
+{
+    return s_ap_mode;
 }

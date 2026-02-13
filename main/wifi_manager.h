@@ -22,3 +22,8 @@ esp_err_t wifi_manager_set_credentials(const char *ssid, const char *password);
  * Returns true if connected to an AP in STA mode.
  */
 bool wifi_manager_is_connected(void);
+
+/**
+ * Returns true if running in AP mode (setup mode).
+ */
+bool wifi_manager_is_ap_mode(void);

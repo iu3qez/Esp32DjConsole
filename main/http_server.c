@@ -214,6 +214,7 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
 
     // WiFi
     cJSON_AddBoolToObject(root, "wifi_connected", wifi_manager_is_connected());
+    cJSON_AddBoolToObject(root, "ap_mode", wifi_manager_is_ap_mode());
 
     // System
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
@@ -553,7 +554,40 @@ static const char *get_mime_type(const char *path)
     return "application/octet-stream";
 }
 
-static esp_err_t static_file_handler(httpd_req_t *req)
+static esp_err_t static_file_handler_internal(httpd_req_t *req);
+
+// Captive portal detection: redirect non-local requests to our setup page in AP mode
+static esp_err_t captive_portal_handler(httpd_req_t *req)
+{
+    if (wifi_manager_is_ap_mode()) {
+        // Check Host header - if it's not our IP or hostname, redirect
+        char host[64] = {0};
+        httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host));
+        if (host[0] != '\0'
+            && strcmp(host, "192.168.4.1") != 0
+            && strcmp(host, "djconsole.local") != 0
+            && strncmp(host, "192.168.4.1:", 12) != 0) {
+            httpd_resp_set_status(req, "302 Found");
+            httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
+            httpd_resp_sendstr(req, "Redirecting to DJ Console setup...");
+            return ESP_OK;
+        }
+    }
+    // Fall through to normal static file serving
+    return static_file_handler_internal(req);
+}
+
+// Check if client accepts gzip encoding
+static bool client_accepts_gzip(httpd_req_t *req)
+{
+    char accept[128] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Accept-Encoding", accept, sizeof(accept)) == ESP_OK) {
+        return (strstr(accept, "gzip") != NULL);
+    }
+    return false;
+}
+
+static esp_err_t static_file_handler_internal(httpd_req_t *req)
 {
     char filepath[128];
     const char *uri = req->uri;
@@ -579,13 +613,27 @@ static esp_err_t static_file_handler(httpd_req_t *req)
         }
     }
 
-    FILE *f = fopen(filepath, "r");
+    // Try serving pre-compressed .gz version if client accepts it
+    bool serving_gzip = false;
+    char gzpath[132];
+    if (client_accepts_gzip(req)) {
+        snprintf(gzpath, sizeof(gzpath), "%s.gz", filepath);
+        if (stat(gzpath, &st) == 0) {
+            serving_gzip = true;
+        }
+    }
+
+    FILE *f = fopen(serving_gzip ? gzpath : filepath, "r");
     if (!f) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open file");
         return ESP_FAIL;
     }
 
     httpd_resp_set_type(req, get_mime_type(filepath));
+
+    if (serving_gzip) {
+        httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    }
 
     // Enable caching for static assets (not index.html)
     if (strstr(filepath, "index.html") == NULL) {
@@ -690,7 +738,7 @@ esp_err_t http_server_init(void)
         httpd_uri_t static_uri = {
             .uri = "/*",
             .method = HTTP_GET,
-            .handler = static_file_handler,
+            .handler = captive_portal_handler,
         };
         httpd_register_uri_handler(s_server, &static_uri);
     }
