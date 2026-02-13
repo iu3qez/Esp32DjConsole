@@ -7,6 +7,8 @@ idf_component_register(
         "usb_debug.c"
         "tci_client.c"
         "cat_client.c"
+        "config_store.c"
+        "mapping_engine.c"
     INCLUDE_DIRS
         "."
     REQUIRES
