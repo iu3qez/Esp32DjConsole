@@ -14,6 +14,9 @@ export const status = writable({
 // Live control events (ring buffer of last 100)
 export const controlLog = writable([]);
 
+// Live CAT dispatch events (ring buffer of last 100)
+export const catLog = writable([]);
+
 const MAX_LOG = 100;
 
 function handleWsMessage(msg) {
@@ -26,6 +29,13 @@ function handleWsMessage(msg) {
       break;
     case 'control':
       controlLog.update(log => {
+        const entry = { ...msg, ts: Date.now() };
+        const next = [entry, ...log];
+        return next.length > MAX_LOG ? next.slice(0, MAX_LOG) : next;
+      });
+      break;
+    case 'cat':
+      catLog.update(log => {
         const entry = { ...msg, ts: Date.now() };
         const next = [entry, ...log];
         return next.length > MAX_LOG ? next.slice(0, MAX_LOG) : next;

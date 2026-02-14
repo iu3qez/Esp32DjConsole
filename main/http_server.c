@@ -117,6 +117,30 @@ static void on_learn_complete(const char *control_name, uint16_t command_id, con
     http_server_ws_broadcast(buf);
 }
 
+// ----- CAT dispatch callback (fires when a mapped command sends CAT) -----
+
+static const char *exec_type_str(cmd_exec_type_t t)
+{
+    switch (t) {
+    case CMD_CAT_BUTTON: return "BTN";
+    case CMD_CAT_TOGGLE: return "TOG";
+    case CMD_CAT_SET:    return "SET";
+    case CMD_CAT_FREQ:   return "FRQ";
+    case CMD_CAT_WHEEL:  return "WHL";
+    default:             return "?";
+    }
+}
+
+static void on_cat_dispatch(const char *control_name, const char *command_name,
+                            cmd_exec_type_t exec_type, const char *cat_string)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "{\"type\":\"cat\",\"control\":\"%s\",\"cmd\":\"%s\",\"exec\":\"%s\",\"cat\":\"%s\"}",
+        control_name, command_name, exec_type_str(exec_type), cat_string);
+    http_server_ws_broadcast(buf);
+}
+
 // ----- WebSocket handler -----
 
 static esp_err_t ws_handler(httpd_req_t *req)
@@ -781,8 +805,9 @@ esp_err_t http_server_init(void)
         ESP_LOGW(TAG, "SPIFFS not available - static file serving disabled");
     }
 
-    // Register learn mode callback
+    // Register mapping engine callbacks
     mapping_engine_set_learn_callback(on_learn_complete);
+    mapping_engine_set_cat_callback(on_cat_dispatch);
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 20;
