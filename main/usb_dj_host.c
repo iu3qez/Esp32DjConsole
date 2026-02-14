@@ -143,6 +143,7 @@ static uint8_t  s_bulk_out_ep  = 0;
 static uint16_t s_bulk_out_mps = 0;
 static usb_transfer_t *s_bulk_out_xfer = NULL;
 static SemaphoreHandle_t s_out_mutex = NULL;
+static SemaphoreHandle_t s_out_done = NULL;  // signaled when OUT transfer completes
 
 static usb_host_client_handle_t s_client_hdl = NULL;
 static usb_device_handle_t s_dev_hdl = NULL;
@@ -240,6 +241,7 @@ static void bulk_out_cb(usb_transfer_t *transfer)
     if (transfer->status != USB_TRANSFER_STATUS_COMPLETED) {
         ESP_LOGE(TAG, "OUT transfer failed, status=%d", transfer->status);
     }
+    xSemaphoreGive(s_out_done);
 }
 
 // ---------------------------------------------------------------------------
@@ -688,6 +690,8 @@ esp_err_t usb_dj_host_init(dj_control_callback_t callback)
         return err;
     }
     s_out_mutex = xSemaphoreCreateMutex();
+    s_out_done = xSemaphoreCreateBinary();
+    xSemaphoreGive(s_out_done);  // start as "available" (no transfer in progress)
 
     // Create tasks on core 0 (USB peripheral is on core 0)
     xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, NULL, 2, NULL, 0);
@@ -722,7 +726,14 @@ esp_err_t usb_dj_host_send(const uint8_t *data, size_t len)
         return ESP_ERR_INVALID_SIZE;
     }
 
-    if (xSemaphoreTake(s_out_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    // Serialize access: only one caller at a time
+    if (xSemaphoreTake(s_out_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Wait for any previous transfer to finish
+    if (xSemaphoreTake(s_out_done, pdMS_TO_TICKS(200)) != pdTRUE) {
+        xSemaphoreGive(s_out_mutex);
         return ESP_ERR_TIMEOUT;
     }
 
@@ -736,6 +747,7 @@ esp_err_t usb_dj_host_send(const uint8_t *data, size_t len)
     esp_err_t err = usb_host_transfer_submit(s_bulk_out_xfer);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Bulk OUT submit failed: %s", esp_err_to_name(err));
+        xSemaphoreGive(s_out_done);  // release so next call doesn't deadlock
     }
 
     xSemaphoreGive(s_out_mutex);
