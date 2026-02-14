@@ -135,3 +135,25 @@ typedef void (*mapping_learn_callback_t)(
     const char *command_name);
 
 void mapping_engine_set_learn_callback(mapping_learn_callback_t cb);
+
+/**
+ * Callback fired when a CAT command is dispatched (for debug logging).
+ * Set via mapping_engine_set_cat_callback().
+ */
+typedef void (*mapping_cat_callback_t)(
+    const char *control_name,
+    const char *command_name,
+    cmd_exec_type_t exec_type,
+    const char *cat_string);
+
+void mapping_engine_set_cat_callback(mapping_cat_callback_t cb);
+
+// ---------------------------------------------------------------------------
+// CAT response sync — feed Thetis responses to keep VFO/step in sync
+// ---------------------------------------------------------------------------
+
+/** Handle CAT response from Thetis (updates local VFO freq and tuning step). */
+void mapping_engine_on_cat_response(const char *cmd, const char *value);
+
+/** Query Thetis for current ZZFA, ZZFB, ZZAC. Call after CAT connects. */
+void mapping_engine_request_sync(void);

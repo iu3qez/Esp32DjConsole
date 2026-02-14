@@ -47,6 +47,7 @@ static void cat_state_cb(cat_state_t new_state)
         ESP_LOGI(TAG, "CAT: connected");
         status_led_set(LED_CYAN);
         http_server_notify_status();
+        mapping_engine_request_sync();  // Query ZZFA, ZZFB, ZZAC from Thetis
         break;
     case CAT_STATE_DISCONNECTED:
         ESP_LOGW(TAG, "CAT: disconnected");
@@ -64,10 +65,11 @@ static void cat_state_cb(cat_state_t new_state)
     }
 }
 
-// CAT response callback
+// CAT response callback — forward to mapping engine for VFO/step sync
 static void cat_response_cb(const char *cmd, const char *value)
 {
     ESP_LOGD(TAG, "CAT response: %s = %s", cmd, value);
+    mapping_engine_on_cat_response(cmd, value);
 }
 
 // Start CAT client from NVS config
