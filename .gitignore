@@ -33,3 +33,4 @@ thoughts/
 # TLDR cache
 .tldr/
 .tldrignore
+.claude/smarter-everyday-state.json
