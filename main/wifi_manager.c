@@ -19,7 +19,7 @@ static const char *TAG = "wifi_mgr";
 #define MAX_RETRY          5
 
 #define AP_SSID            "DJConsole-Setup"
-#define AP_PASS            "djconsole"
+#define AP_PASS            ""
 #define AP_MAX_CONN        4
 
 #define NVS_NAMESPACE      "wifi"
@@ -198,7 +198,7 @@ static esp_err_t start_ap(void)
             .ssid_len = strlen(AP_SSID),
             .password = AP_PASS,
             .max_connection = AP_MAX_CONN,
-            .authmode = WIFI_AUTH_WPA2_PSK,
+            .authmode = WIFI_AUTH_OPEN,
         },
     };
 
@@ -211,8 +211,8 @@ static esp_err_t start_ap(void)
     // Start captive portal DNS hijack
     xTaskCreate(dns_hijack_task, "dns_hijack", 4096, NULL, 5, NULL);
 
-    ESP_LOGI(TAG, "AP started. Connect to '%s' (pass: '%s') and configure WiFi via web GUI",
-             AP_SSID, AP_PASS);
+    ESP_LOGI(TAG, "AP started. Connect to '%s' (open, no password) and configure WiFi via web GUI",
+             AP_SSID);
     return ESP_OK;
 }
 
