@@ -130,15 +130,21 @@ static const init_cmd_t s_init_sequence[] = {
 // Device state
 // ---------------------------------------------------------------------------
 
-#define BULK_IN_EP   0x81
-#define IFACE_NUM    1     // hdjd Linux driver uses interface 1 for MP3e2
-#define EP_MPS       64
+#define DATA_IN_EP_DEFAULT  0x81   // EP1 IN (Teensy reference driver uses endpoint 1)
+#define IFACE_NUM    1             // hdjd Linux driver uses interface 1 for MP3e2
+#define EP_MPS_DEFAULT  64         // Fallback MPS; actual value read from descriptor
+
+static uint8_t  s_bulk_in_ep  = DATA_IN_EP_DEFAULT;
+static uint16_t s_bulk_in_mps = EP_MPS_DEFAULT;
+static uint8_t  s_data_ep_iface = 0;  // interface owning the data endpoint
 
 static usb_host_client_handle_t s_client_hdl = NULL;
 static usb_device_handle_t s_dev_hdl = NULL;
 static usb_transfer_t *s_ctrl_xfer = NULL;
 static usb_transfer_t *s_bulk_in_xfer = NULL;
 static SemaphoreHandle_t s_ctrl_sem = NULL;
+static TaskHandle_t s_setup_task_hdl = NULL;
+static uint8_t s_pending_dev_addr = 0;
 
 static uint8_t s_current_state[DJ_STATE_SIZE];
 static uint8_t s_old_state[DJ_STATE_SIZE];
@@ -188,22 +194,35 @@ static void ctrl_xfer_cb(usb_transfer_t *transfer)
     xSemaphoreGive(s_ctrl_sem);
 }
 
+static uint32_t s_xfer_count = 0;
+
 static void bulk_in_cb(usb_transfer_t *transfer)
 {
     if (transfer->status == USB_TRANSFER_STATUS_COMPLETED) {
+        s_xfer_count++;
+        if (s_xfer_count <= 3 || (s_xfer_count % 1000) == 0) {
+            ESP_LOGI(TAG, "IN xfer #%lu: %d bytes on EP 0x%02X",
+                     (unsigned long)s_xfer_count,
+                     transfer->actual_num_bytes,
+                     transfer->bEndpointAddress);
+        }
         if (transfer->actual_num_bytes >= DJ_STATE_SIZE) {
             if (s_raw_callback) {
                 s_raw_callback(transfer->data_buffer, transfer->actual_num_bytes);
             }
             memcpy(s_current_state, transfer->data_buffer, DJ_STATE_SIZE);
             process_state_update();
+        } else if (transfer->actual_num_bytes > 0) {
+            ESP_LOGW(TAG, "Short transfer: %d bytes (need %d)",
+                     transfer->actual_num_bytes, DJ_STATE_SIZE);
         }
         // Re-submit for continuous polling
         usb_host_transfer_submit(transfer);
     } else if (transfer->status == USB_TRANSFER_STATUS_CANCELED) {
-        ESP_LOGW(TAG, "Bulk IN cancelled (device disconnected?)");
+        ESP_LOGW(TAG, "IN transfer cancelled (device disconnected?)");
     } else {
-        ESP_LOGE(TAG, "Bulk IN error, status=%d", transfer->status);
+        ESP_LOGE(TAG, "IN transfer error, status=%d, EP=0x%02X",
+                 transfer->status, transfer->bEndpointAddress);
         // Try to re-submit after a short delay
         vTaskDelay(pdMS_TO_TICKS(100));
         usb_host_transfer_submit(transfer);
@@ -280,16 +299,118 @@ static esp_err_t run_init_sequence(void)
 }
 
 // ---------------------------------------------------------------------------
+// Descriptor enumeration - find bulk IN endpoint on claimed interface
+// ---------------------------------------------------------------------------
+
+static uint8_t find_data_in_ep(usb_device_handle_t dev_hdl)
+{
+    const usb_config_desc_t *config_desc;
+    esp_err_t err = usb_host_get_active_config_descriptor(dev_hdl, &config_desc);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Could not get config descriptor: %s", esp_err_to_name(err));
+        return 0;
+    }
+
+    // Walk the raw descriptor bytes, log ALL endpoints for debugging.
+    // Scan ALL interfaces - the Teensy driver reads from EP 0x81 which may
+    // be on interface 0, not interface 1. Prefer bulk over interrupt and
+    // larger MPS to avoid picking a small status endpoint (like EP 0x82/3-byte).
+    const uint8_t *p = (const uint8_t *)config_desc;
+    int total_len = config_desc->wTotalLength;
+    int offset = 0;
+    int current_iface = -1;
+    uint8_t best_ep = 0;
+    uint16_t best_mps = 0;
+    uint8_t best_type = 0;   // 2=bulk, 3=interrupt
+    uint8_t best_iface = 0;
+
+    ESP_LOGI(TAG, "Descriptor total length: %d bytes", total_len);
+
+    while (offset < total_len) {
+        uint8_t bLength = p[offset];
+        uint8_t bDescriptorType = p[offset + 1];
+
+        if (bLength == 0) break;  // prevent infinite loop
+
+        // Interface descriptor (type 4)
+        if (bDescriptorType == 4 && bLength >= 9) {
+            current_iface = p[offset + 2];  // bInterfaceNumber
+            ESP_LOGI(TAG, "  Interface %d: class=%d, subclass=%d, protocol=%d, endpoints=%d",
+                     current_iface, p[offset + 5], p[offset + 6], p[offset + 7], p[offset + 4]);
+        }
+
+        // Endpoint descriptor (type 5) - log ALL endpoints
+        if (bDescriptorType == 5 && bLength >= 7) {
+            uint8_t ep_addr = p[offset + 2];
+            uint8_t ep_attr = p[offset + 3];  // bmAttributes
+            uint16_t ep_mps = p[offset + 4] | (p[offset + 5] << 8);
+            uint8_t ep_type = ep_attr & 0x03;
+
+            const char *dir = (ep_addr & 0x80) ? "IN" : "OUT";
+            const char *type_str = "?";
+            switch (ep_type) {
+                case 0: type_str = "Control"; break;
+                case 1: type_str = "Isochronous"; break;
+                case 2: type_str = "Bulk"; break;
+                case 3: type_str = "Interrupt"; break;
+            }
+            ESP_LOGI(TAG, "    EP 0x%02X: %s %s, MPS=%d (iface %d)",
+                     ep_addr, type_str, dir, ep_mps, current_iface);
+
+            // Accept bulk or interrupt IN endpoints on ANY interface
+            if ((ep_addr & 0x80) && (ep_type == 2 || ep_type == 3)) {
+                bool better = false;
+                if (best_ep == 0) {
+                    better = true;
+                } else if (ep_type == 2 && best_type == 3) {
+                    better = true;  // bulk beats interrupt
+                } else if (ep_type == best_type && ep_mps > best_mps) {
+                    better = true;  // same type, bigger MPS wins
+                }
+
+                if (better) {
+                    best_ep = ep_addr;
+                    best_mps = ep_mps;
+                    best_type = ep_type;
+                    best_iface = current_iface;
+                    ESP_LOGI(TAG, "  -> Best candidate: EP 0x%02X (%s IN, MPS=%d, iface %d)",
+                             ep_addr, type_str, ep_mps, current_iface);
+                }
+            }
+        }
+
+        offset += bLength;
+    }
+
+    if (best_ep) {
+        ESP_LOGI(TAG, "  => Selected EP 0x%02X (MPS=%d) on interface %d", best_ep, best_mps, best_iface);
+        s_bulk_in_mps = best_mps;
+        s_data_ep_iface = best_iface;
+        return best_ep;
+    }
+
+    ESP_LOGW(TAG, "No bulk/interrupt IN endpoint found");
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Start bulk IN polling
 // ---------------------------------------------------------------------------
 
 static esp_err_t start_bulk_polling(void)
 {
+    // num_bytes must be an integer multiple of the endpoint's actual MPS.
+    // Round up to cover at least DJ_STATE_SIZE (38) bytes.
+    uint16_t mps = s_bulk_in_mps;
+    uint16_t num_bytes = ((DJ_STATE_SIZE + mps - 1) / mps) * mps;
+
     s_bulk_in_xfer->device_handle = s_dev_hdl;
-    s_bulk_in_xfer->bEndpointAddress = BULK_IN_EP;
-    s_bulk_in_xfer->num_bytes = EP_MPS;  // Must be MPS-aligned
+    s_bulk_in_xfer->bEndpointAddress = s_bulk_in_ep;
+    s_bulk_in_xfer->num_bytes = num_bytes;
     s_bulk_in_xfer->callback = bulk_in_cb;
     s_bulk_in_xfer->context = NULL;
+
+    ESP_LOGI(TAG, "Bulk IN: MPS=%d, num_bytes=%d", mps, num_bytes);
 
     esp_err_t err = usb_host_transfer_submit(s_bulk_in_xfer);
     if (err != ESP_OK) {
@@ -297,7 +418,7 @@ static esp_err_t start_bulk_polling(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Bulk IN polling started on EP 0x%02X", BULK_IN_EP);
+    ESP_LOGI(TAG, "Bulk IN polling started on EP 0x%02X", s_bulk_in_ep);
     return ESP_OK;
 }
 
@@ -329,13 +450,36 @@ static void setup_device(uint8_t dev_addr)
              desc->idVendor, desc->idProduct);
     status_led_set(LED_PURPLE);
 
-    // Claim interface
-    err = usb_host_interface_claim(s_client_hdl, s_dev_hdl, IFACE_NUM, 0);
+    // Enumerate descriptors FIRST to find the best data IN endpoint
+    // across ALL interfaces. The Teensy driver uses EP 0x81 (endpoint 1 IN)
+    // which may be on interface 0, not interface 1.
+    ESP_LOGI(TAG, "Enumerating USB descriptors...");
+    uint8_t found_ep = find_data_in_ep(s_dev_hdl);
+    if (found_ep) {
+        s_bulk_in_ep = found_ep;
+    } else {
+        ESP_LOGW(TAG, "Using default EP 0x%02X", DATA_IN_EP_DEFAULT);
+        s_bulk_in_ep = DATA_IN_EP_DEFAULT;
+        s_data_ep_iface = 0;
+    }
+
+    // Claim the interface that owns the data endpoint
+    ESP_LOGI(TAG, "Claiming interface %d for data EP 0x%02X", s_data_ep_iface, s_bulk_in_ep);
+    err = usb_host_interface_claim(s_client_hdl, s_dev_hdl, s_data_ep_iface, 0);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to claim interface %d: %s", IFACE_NUM, esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to claim interface %d: %s", s_data_ep_iface, esp_err_to_name(err));
         usb_host_device_close(s_client_hdl, s_dev_hdl);
         s_dev_hdl = NULL;
         return;
+    }
+
+    // Also claim interface 1 if the data endpoint is on a different interface
+    // (interface 1 is used by the hdjd Linux driver for this device)
+    if (s_data_ep_iface != IFACE_NUM) {
+        err = usb_host_interface_claim(s_client_hdl, s_dev_hdl, IFACE_NUM, 0);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Could not also claim interface %d: %s (non-fatal)", IFACE_NUM, esp_err_to_name(err));
+        }
     }
 
     // Run vendor-specific init sequence
@@ -343,7 +487,10 @@ static void setup_device(uint8_t dev_addr)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Init sequence failed");
         status_led_set(LED_RED);
-        usb_host_interface_release(s_client_hdl, s_dev_hdl, IFACE_NUM);
+        usb_host_interface_release(s_client_hdl, s_dev_hdl, s_data_ep_iface);
+        if (s_data_ep_iface != IFACE_NUM) {
+            usb_host_interface_release(s_client_hdl, s_dev_hdl, IFACE_NUM);
+        }
         usb_host_device_close(s_client_hdl, s_dev_hdl);
         s_dev_hdl = NULL;
         return;
@@ -357,7 +504,10 @@ static void setup_device(uint8_t dev_addr)
     err = start_bulk_polling();
     if (err != ESP_OK) {
         status_led_set(LED_RED);
-        usb_host_interface_release(s_client_hdl, s_dev_hdl, IFACE_NUM);
+        usb_host_interface_release(s_client_hdl, s_dev_hdl, s_data_ep_iface);
+        if (s_data_ep_iface != IFACE_NUM) {
+            usb_host_interface_release(s_client_hdl, s_dev_hdl, IFACE_NUM);
+        }
         usb_host_device_close(s_client_hdl, s_dev_hdl);
         s_dev_hdl = NULL;
         return;
@@ -373,7 +523,10 @@ static void teardown_device(void)
     s_device_connected = false;
 
     if (s_dev_hdl) {
-        usb_host_interface_release(s_client_hdl, s_dev_hdl, IFACE_NUM);
+        usb_host_interface_release(s_client_hdl, s_dev_hdl, s_data_ep_iface);
+        if (s_data_ep_iface != IFACE_NUM) {
+            usb_host_interface_release(s_client_hdl, s_dev_hdl, IFACE_NUM);
+        }
         usb_host_device_close(s_client_hdl, s_dev_hdl);
         s_dev_hdl = NULL;
     }
@@ -390,7 +543,11 @@ static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *
     switch (event_msg->event) {
     case USB_HOST_CLIENT_EVENT_NEW_DEV:
         ESP_LOGI(TAG, "New USB device at address %d", event_msg->new_dev.address);
-        setup_device(event_msg->new_dev.address);
+        // Don't call setup_device here — it blocks on control transfer semaphores,
+        // but ctrl_xfer_cb is dispatched by usb_host_client_handle_events() which
+        // is blocked waiting for this callback to return. Signal a separate task.
+        s_pending_dev_addr = event_msg->new_dev.address;
+        xTaskNotifyGive(s_setup_task_hdl);
         break;
     case USB_HOST_CLIENT_EVENT_DEV_GONE:
         teardown_device();
@@ -403,6 +560,14 @@ static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *
 // ---------------------------------------------------------------------------
 // FreeRTOS tasks
 // ---------------------------------------------------------------------------
+
+static void device_setup_task(void *arg)
+{
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        setup_device(s_pending_dev_addr);
+    }
+}
 
 static void usb_lib_task(void *arg)
 {
@@ -467,13 +632,13 @@ esp_err_t usb_dj_host_init(dj_control_callback_t callback)
     }
 
     // Allocate transfer buffers (DMA-capable memory)
-    err = usb_host_transfer_alloc(sizeof(usb_setup_packet_t) + EP_MPS, 0, &s_ctrl_xfer);
+    err = usb_host_transfer_alloc(sizeof(usb_setup_packet_t) + EP_MPS_DEFAULT, 0, &s_ctrl_xfer);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to allocate control transfer");
         return err;
     }
 
-    err = usb_host_transfer_alloc(EP_MPS, 0, &s_bulk_in_xfer);
+    err = usb_host_transfer_alloc(EP_MPS_DEFAULT, 0, &s_bulk_in_xfer);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to allocate bulk IN transfer");
         return err;
@@ -482,6 +647,7 @@ esp_err_t usb_dj_host_init(dj_control_callback_t callback)
     // Create tasks on core 0 (USB peripheral is on core 0)
     xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, NULL, 2, NULL, 0);
     xTaskCreatePinnedToCore(usb_client_task, "usb_client", 4096, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(device_setup_task, "dj_setup", 4096, NULL, 2, &s_setup_task_hdl, 0);
 
     ESP_LOGI(TAG, "USB DJ host initialized (%d controls in mapping table)", NUM_MAPPINGS);
     return ESP_OK;
