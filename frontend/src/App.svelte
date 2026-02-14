@@ -7,10 +7,12 @@
   import Mappings from './pages/Mappings.svelte';
   import Config from './pages/Config.svelte';
   import Debug from './pages/Debug.svelte';
+  import Leds from './pages/Leds.svelte';
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', component: Dashboard },
     { id: 'mappings', label: 'Mappings', component: Mappings },
+    { id: 'leds', label: 'LEDs', component: Leds },
     { id: 'config', label: 'Config', component: Config },
     { id: 'debug', label: 'Debug', component: Debug },
   ];

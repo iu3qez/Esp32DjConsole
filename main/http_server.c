@@ -12,6 +12,7 @@
 #include "usb_dj_host.h"
 #include "usb_debug.h"
 #include "wifi_manager.h"
+#include "dj_led.h"
 
 static const char *TAG = "http_srv";
 
@@ -177,6 +178,25 @@ static esp_err_t ws_handler(httpd_req_t *req)
                         }
                     } else if (strcmp(type->valuestring, "learn_cancel") == 0) {
                         mapping_engine_cancel_learn();
+                    } else if (strcmp(type->valuestring, "led_set") == 0) {
+                        cJSON *note_j = cJSON_GetObjectItem(msg, "note");
+                        cJSON *state_j = cJSON_GetObjectItem(msg, "state");
+                        if (note_j && cJSON_IsNumber(note_j) && state_j && cJSON_IsString(state_j)) {
+                            uint8_t note = (uint8_t)note_j->valueint;
+                            const char *st = state_j->valuestring;
+                            if (strcmp(st, "on") == 0) dj_led_set(note, true);
+                            else if (strcmp(st, "off") == 0) { dj_led_set(note, false); dj_led_blink(note, false); }
+                            else if (strcmp(st, "blink") == 0) dj_led_blink(note, true);
+                            char ws_buf[64];
+                            snprintf(ws_buf, sizeof(ws_buf), "{\"type\":\"led\",\"note\":%d,\"state\":\"%s\"}", note, st);
+                            http_server_ws_broadcast(ws_buf);
+                        }
+                    } else if (strcmp(type->valuestring, "led_all_off") == 0) {
+                        dj_led_all_off();
+                        http_server_ws_broadcast("{\"type\":\"led_all_off\"}");
+                    } else if (strcmp(type->valuestring, "led_test") == 0) {
+                        dj_led_test();
+                        http_server_ws_broadcast("{\"type\":\"led_all_off\"}");
                     }
                 }
                 cJSON_Delete(msg);
@@ -642,6 +662,126 @@ static esp_err_t api_mapping_delete_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ----- REST API: GET /api/leds -----
+
+static esp_err_t api_leds_get_handler(httpd_req_t *req)
+{
+    const uint8_t *states = dj_led_get_all();
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int note = 0; note <= LED_NOTE_MAX; note++) {
+        if (states[note] != LED_STATE_OFF) {
+            cJSON *obj = cJSON_CreateObject();
+            cJSON_AddNumberToObject(obj, "note", note);
+            const char *st = (states[note] == LED_STATE_BLINK) ? "blink" : "on";
+            cJSON_AddStringToObject(obj, "state", st);
+            cJSON_AddItemToArray(arr, obj);
+        }
+    }
+
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
+
+// ----- REST API: POST /api/leds -----
+
+static esp_err_t api_leds_post_handler(httpd_req_t *req)
+{
+    int total_len = req->content_len;
+    if (total_len <= 0 || total_len > 256) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length");
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(total_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    int received = 0;
+    while (received < total_len) {
+        int ret = httpd_req_recv(req, buf + received, total_len - received);
+        if (ret <= 0) { free(buf); return ESP_FAIL; }
+        received += ret;
+    }
+    buf[total_len] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *note_j = cJSON_GetObjectItem(root, "note");
+    cJSON *state_j = cJSON_GetObjectItem(root, "state");
+
+    if (!note_j || !cJSON_IsNumber(note_j) || !state_j || !cJSON_IsString(state_j)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Need {note:N, state:\"on\"|\"off\"|\"blink\"}");
+        return ESP_FAIL;
+    }
+
+    uint8_t note = (uint8_t)note_j->valueint;
+    const char *state = state_j->valuestring;
+    cJSON_Delete(root);
+
+    if (note > LED_NOTE_MAX) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Note out of range");
+        return ESP_FAIL;
+    }
+
+    if (strcmp(state, "on") == 0) {
+        dj_led_set(note, true);
+    } else if (strcmp(state, "off") == 0) {
+        dj_led_set(note, false);
+        dj_led_blink(note, false);
+    } else if (strcmp(state, "blink") == 0) {
+        dj_led_blink(note, true);
+    }
+
+    // Broadcast LED change via WebSocket
+    char ws_buf[64];
+    snprintf(ws_buf, sizeof(ws_buf), "{\"type\":\"led\",\"note\":%d,\"state\":\"%s\"}", note, state);
+    http_server_ws_broadcast(ws_buf);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// ----- REST API: POST /api/leds/all-off -----
+
+static esp_err_t api_leds_alloff_handler(httpd_req_t *req)
+{
+    dj_led_all_off();
+
+    http_server_ws_broadcast("{\"type\":\"led_all_off\"}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// ----- REST API: POST /api/leds/test -----
+
+static esp_err_t api_leds_test_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"msg\":\"Test started\"}");
+
+    dj_led_test();
+
+    http_server_ws_broadcast("{\"type\":\"led_all_off\"}");
+    return ESP_OK;
+}
+
 // ----- Static file serving from SPIFFS -----
 
 static const char *get_mime_type(const char *path)
@@ -842,6 +982,10 @@ esp_err_t http_server_init(void)
         { .uri = "/api/mappings/download", .method = HTTP_GET,  .handler = api_mappings_download_handler },
         { .uri = "/api/mappings/upload",   .method = HTTP_POST, .handler = api_mappings_upload_handler },
         { .uri = "/api/mappings/clear",    .method = HTTP_POST, .handler = api_mapping_delete_handler },
+        { .uri = "/api/leds",              .method = HTTP_GET,  .handler = api_leds_get_handler },
+        { .uri = "/api/leds",              .method = HTTP_POST, .handler = api_leds_post_handler },
+        { .uri = "/api/leds/all-off",      .method = HTTP_POST, .handler = api_leds_alloff_handler },
+        { .uri = "/api/leds/test",         .method = HTTP_POST, .handler = api_leds_test_handler },
     };
     for (int i = 0; i < sizeof(api_uris) / sizeof(api_uris[0]); i++) {
         httpd_register_uri_handler(s_server, &api_uris[i]);

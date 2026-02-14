@@ -17,6 +17,9 @@ export const controlLog = writable([]);
 // Live CAT dispatch events (ring buffer of last 100)
 export const catLog = writable([]);
 
+// LED states: Map of note -> "on"|"off"|"blink"
+export const ledStates = writable({});
+
 const MAX_LOG = 100;
 
 function handleWsMessage(msg) {
@@ -40,6 +43,12 @@ function handleWsMessage(msg) {
         const next = [entry, ...log];
         return next.length > MAX_LOG ? next.slice(0, MAX_LOG) : next;
       });
+      break;
+    case 'led':
+      ledStates.update(s => ({ ...s, [msg.note]: msg.state }));
+      break;
+    case 'led_all_off':
+      ledStates.set({});
       break;
   }
 }

@@ -18,6 +18,10 @@
  *   GET  /api/mappings/download   - Download mappings.json as file attachment
  *   POST /api/mappings/upload     - Upload mappings.json, validate and reload
  *   POST /api/mappings/clear?c=X  - Remove mapping for control X
+ *   GET  /api/leds                - Current LED states (JSON array)
+ *   POST /api/leds                - Set LED: {"note":N,"state":"on"|"off"|"blink"}
+ *   POST /api/leds/all-off        - Turn all LEDs off
+ *   POST /api/leds/test           - Run LED test sweep
  *
  * WebSocket:
  *   /ws  - Bidirectional:

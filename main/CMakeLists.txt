@@ -8,6 +8,7 @@ idf_component_register(
         "cat_client.c"
         "config_store.c"
         "mapping_engine.c"
+        "dj_led.c"
         "http_server.c"
     INCLUDE_DIRS
         "."

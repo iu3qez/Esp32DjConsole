@@ -1,5 +1,6 @@
 #include "mapping_engine.h"
 #include "cat_client.h"
+#include "dj_led.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -312,6 +313,52 @@ static bool *find_toggle(uint16_t cmd_id)
         return &s_toggles[s_toggle_count++].state;
     }
     return NULL;
+}
+
+// ===================================================================
+// Control name -> LED note lookup
+// ===================================================================
+
+static const struct { const char *control; uint8_t note; } s_led_map[] = {
+    // Deck A
+    {"Play_A",     LED_PLAY_A},
+    {"CUE_A",      LED_CUE_A},
+    {"Sync_A",     LED_SYNC_A},
+    {"Listen_A",   LED_LISTEN_A},
+    {"N1_A",       LED_N1_A},
+    {"N2_A",       LED_N2_A},
+    {"N3_A",       LED_N3_A},
+    {"N4_A",       LED_N4_A},
+    {"N5_A",       LED_N5_A},
+    {"N6_A",       LED_N6_A},
+    {"N7_A",       LED_N7_A},
+    {"N8_A",       LED_N8_A},
+    // Deck B
+    {"Play_B",     LED_PLAY_B},
+    {"CUE_B",      LED_CUE_B},
+    {"Sync_B",     LED_SYNC_B},
+    {"Listen_B",   LED_LISTEN_B},
+    {"N1_B",       LED_N1_B},
+    {"N2_B",       LED_N2_B},
+    {"N3_B",       LED_N3_B},
+    {"N4_B",       LED_N4_B},
+    {"N5_B",       LED_N5_B},
+    {"N6_B",       LED_N6_B},
+    {"N7_B",       LED_N7_B},
+    {"N8_B",       LED_N8_B},
+    // Global
+    {"Up",         LED_UP},
+    {"Down",       LED_DOWN},
+};
+#define LED_MAP_COUNT (sizeof(s_led_map) / sizeof(s_led_map[0]))
+
+static uint8_t find_led_note(const char *control_name)
+{
+    for (int i = 0; i < (int)LED_MAP_COUNT; i++) {
+        if (strcmp(s_led_map[i].control, control_name) == 0)
+            return s_led_map[i].note;
+    }
+    return 0;  // 0 = no LED for this control
 }
 
 // ===================================================================
@@ -680,6 +727,15 @@ void mapping_engine_on_control(
     if (!cmd) return;
 
     execute_command(cmd, name, control_type, old_value, new_value, m->param);
+
+    // Update LED to reflect toggle state
+    uint8_t led_note = find_led_note(name);
+    if (led_note > 0 && cmd->exec_type == CMD_CAT_TOGGLE) {
+        bool *state = find_toggle(cmd->id);
+        if (state) {
+            dj_led_set(led_note, *state);
+        }
+    }
 }
 
 const mapping_entry_t *mapping_engine_get_table(int *count)

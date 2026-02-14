@@ -52,6 +52,22 @@ export function downloadMappings() {
   a.click();
 }
 
+export function getLeds() {
+  return request('GET', '/api/leds');
+}
+
+export function setLed(note, state) {
+  return request('POST', '/api/leds', { note, state });
+}
+
+export function ledsAllOff() {
+  return request('POST', '/api/leds/all-off');
+}
+
+export function ledsTest() {
+  return request('POST', '/api/leds/test');
+}
+
 export async function uploadMappings(jsonText) {
   const res = await fetch('/api/mappings/upload', {
     method: 'POST',

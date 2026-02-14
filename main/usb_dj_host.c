@@ -138,6 +138,12 @@ static uint8_t  s_bulk_in_ep  = DATA_IN_EP_DEFAULT;
 static uint16_t s_bulk_in_mps = EP_MPS_DEFAULT;
 static uint8_t  s_data_ep_iface = 0;  // interface owning the data endpoint
 
+// Bulk OUT endpoint for LED control (MIDI packets)
+static uint8_t  s_bulk_out_ep  = 0;
+static uint16_t s_bulk_out_mps = 0;
+static usb_transfer_t *s_bulk_out_xfer = NULL;
+static SemaphoreHandle_t s_out_mutex = NULL;
+
 static usb_host_client_handle_t s_client_hdl = NULL;
 static usb_device_handle_t s_dev_hdl = NULL;
 static usb_transfer_t *s_ctrl_xfer = NULL;
@@ -226,6 +232,13 @@ static void bulk_in_cb(usb_transfer_t *transfer)
         // Try to re-submit after a short delay
         vTaskDelay(pdMS_TO_TICKS(100));
         usb_host_transfer_submit(transfer);
+    }
+}
+
+static void bulk_out_cb(usb_transfer_t *transfer)
+{
+    if (transfer->status != USB_TRANSFER_STATUS_COMPLETED) {
+        ESP_LOGE(TAG, "OUT transfer failed, status=%d", transfer->status);
     }
 }
 
@@ -356,6 +369,14 @@ static uint8_t find_data_in_ep(usb_device_handle_t dev_hdl)
             }
             ESP_LOGI(TAG, "    EP 0x%02X: %s %s, MPS=%d (iface %d)",
                      ep_addr, type_str, dir, ep_mps, current_iface);
+
+            // Detect OUT endpoints for LED control (bulk or interrupt)
+            if (!(ep_addr & 0x80) && (ep_type == 2 || ep_type == 3) && s_bulk_out_ep == 0) {
+                s_bulk_out_ep = ep_addr;
+                s_bulk_out_mps = ep_mps;
+                ESP_LOGI(TAG, "  -> OUT endpoint: EP 0x%02X (%s, MPS=%d, iface %d)",
+                         ep_addr, type_str, ep_mps, current_iface);
+            }
 
             // Accept bulk or interrupt IN endpoints on ANY interface
             if ((ep_addr & 0x80) && (ep_type == 2 || ep_type == 3)) {
@@ -515,12 +536,28 @@ static void setup_device(uint8_t dev_addr)
 
     s_device_connected = true;
     ESP_LOGI(TAG, "DJ Console ready! (%d controls mapped)", NUM_MAPPINGS);
+
+    // Reset LED controller and turn all LEDs off
+    if (s_bulk_out_ep && s_bulk_out_xfer) {
+        ESP_LOGI(TAG, "Resetting LED controller via EP 0x%02X", s_bulk_out_ep);
+        const uint8_t reset_cmd[] = {0xB0, 0x7F, 0x7F};
+        usb_dj_host_send(reset_cmd, sizeof(reset_cmd));
+        vTaskDelay(pdMS_TO_TICKS(50));
+        // Sweep all notes off
+        for (uint8_t note = 0; note <= 46; note++) {
+            const uint8_t off_cmd[] = {0x90, note, 0x00};
+            usb_dj_host_send(off_cmd, sizeof(off_cmd));
+        }
+        ESP_LOGI(TAG, "LED controller reset complete");
+    }
 }
 
 static void teardown_device(void)
 {
     ESP_LOGW(TAG, "Device disconnected");
     s_device_connected = false;
+    s_bulk_out_ep = 0;
+    s_bulk_out_mps = 0;
 
     if (s_dev_hdl) {
         usb_host_interface_release(s_client_hdl, s_dev_hdl, s_data_ep_iface);
@@ -644,6 +681,14 @@ esp_err_t usb_dj_host_init(dj_control_callback_t callback)
         return err;
     }
 
+    // Allocate bulk OUT transfer for LED control
+    err = usb_host_transfer_alloc(EP_MPS_DEFAULT, 0, &s_bulk_out_xfer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to allocate bulk OUT transfer");
+        return err;
+    }
+    s_out_mutex = xSemaphoreCreateMutex();
+
     // Create tasks on core 0 (USB peripheral is on core 0)
     xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, NULL, 2, NULL, 0);
     xTaskCreatePinnedToCore(usb_client_task, "usb_client", 4096, NULL, 2, NULL, 0);
@@ -666,4 +711,33 @@ const uint8_t *usb_dj_host_get_state(void)
 void usb_dj_host_set_raw_callback(dj_raw_state_callback_t cb)
 {
     s_raw_callback = cb;
+}
+
+esp_err_t usb_dj_host_send(const uint8_t *data, size_t len)
+{
+    if (!s_device_connected || !s_bulk_out_xfer || !s_bulk_out_ep) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (len > EP_MPS_DEFAULT) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (xSemaphoreTake(s_out_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    memcpy(s_bulk_out_xfer->data_buffer, data, len);
+    s_bulk_out_xfer->num_bytes = len;
+    s_bulk_out_xfer->device_handle = s_dev_hdl;
+    s_bulk_out_xfer->bEndpointAddress = s_bulk_out_ep;
+    s_bulk_out_xfer->callback = bulk_out_cb;
+    s_bulk_out_xfer->context = NULL;
+
+    esp_err_t err = usb_host_transfer_submit(s_bulk_out_xfer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Bulk OUT submit failed: %s", esp_err_to_name(err));
+    }
+
+    xSemaphoreGive(s_out_mutex);
+    return err;
 }

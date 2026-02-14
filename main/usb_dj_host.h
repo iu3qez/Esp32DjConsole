@@ -67,3 +67,13 @@ typedef void (*dj_raw_state_callback_t)(const uint8_t *raw_data, int length);
  * Register a raw state callback for debug/monitoring.
  */
 void usb_dj_host_set_raw_callback(dj_raw_state_callback_t cb);
+
+/**
+ * Send raw data to the DJ console via USB bulk OUT.
+ * Used by the LED driver to send MIDI note packets.
+ *
+ * @param data  Pointer to data to send
+ * @param len   Number of bytes (typically 3 for MIDI)
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if not connected
+ */
+esp_err_t usb_dj_host_send(const uint8_t *data, size_t len);
