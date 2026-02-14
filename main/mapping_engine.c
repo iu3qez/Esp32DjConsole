@@ -231,9 +231,11 @@ static const int s_step_table[] = {
 #define STEP_TABLE_SIZE (sizeof(s_step_table) / sizeof(s_step_table[0]))
 static int s_tune_step_hz = 10;  // default 10 Hz, updated from ZZAC if supported
 
-// Velocity scaling: slow wheel = 1x step, fast wheel = up to max_multiplier x step
+// Velocity scaling: time between encoder ticks determines step multiplier
 #define VELOCITY_MAX_MULTIPLIER 10
-#define VELOCITY_FAST_THRESHOLD  5   // encoder delta >= this = max speed
+#define VELOCITY_SLOW_US  200000  // >= 200ms between ticks = 1x (slow turning)
+#define VELOCITY_FAST_US   50000  // <= 50ms between ticks = 10x (fast turning)
+static int64_t s_last_freq_tick_us = 0;  // timestamp of last encoder tick
 
 #define MAPPINGS_PATH "/www/mappings.json"
 
@@ -282,14 +284,21 @@ static long snap_tune(long freq, int step, int direction)
     return snapped;
 }
 
-// Velocity-based step multiplier: scales 1x..VELOCITY_MAX_MULTIPLIER based on delta
-static int velocity_multiplier(int abs_delta)
+// Velocity multiplier based on time between encoder ticks.
+// Fast turning (short interval) = high multiplier, slow = 1x.
+static int velocity_multiplier(void)
 {
-    if (abs_delta <= 1) return 1;
-    if (abs_delta >= VELOCITY_FAST_THRESHOLD)
-        return VELOCITY_MAX_MULTIPLIER;
-    // Linear interpolation between 1 and max
-    return 1 + (abs_delta - 1) * (VELOCITY_MAX_MULTIPLIER - 1) / (VELOCITY_FAST_THRESHOLD - 1);
+    int64_t now = esp_timer_get_time();
+    int64_t interval = now - s_last_freq_tick_us;
+    s_last_freq_tick_us = now;
+
+    if (interval <= 0 || interval >= VELOCITY_SLOW_US) return 1;
+    if (interval <= VELOCITY_FAST_US) return VELOCITY_MAX_MULTIPLIER;
+
+    // Linear interpolation: fast..slow -> max..1
+    int range_us = VELOCITY_SLOW_US - VELOCITY_FAST_US;
+    int from_fast = (int)(interval - VELOCITY_FAST_US);
+    return VELOCITY_MAX_MULTIPLIER - (from_fast * (VELOCITY_MAX_MULTIPLIER - 1)) / range_us;
 }
 
 static bool *find_toggle(uint16_t cmd_id)
@@ -379,9 +388,9 @@ static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
         }
         if (delta == 0) break;
 
-        // Step: use Thetis step (from ZZAC), scaled by velocity
+        // Step: use Thetis step (from ZZAC), scaled by tick-rate velocity
         int base_step = s_tune_step_hz;
-        int mult = velocity_multiplier(abs(delta));
+        int mult = velocity_multiplier();
         int step_hz = base_step * mult;
 
         long *freq = NULL;
@@ -787,7 +796,7 @@ void mapping_engine_request_sync(void)
     s_vfo_b_synced = false;
     cat_client_send("ZZFA;");
     cat_client_send("ZZFB;");
-    // Set tuning step to lowest (index 0 = 1 Hz), then query back to confirm
-    cat_client_send("ZZAC00;");
+    // Set tuning step to 10 Hz (index 2), then query back to confirm
+    cat_client_send("ZZAC02;");
     cat_client_send("ZZAC;");
 }
