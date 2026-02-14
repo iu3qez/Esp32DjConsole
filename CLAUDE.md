@@ -114,8 +114,8 @@ Esp32DjConsole/
 ### USB Protocol (Hercules DJ Console MP3 e2)
 
 - **VID/PID:** 0x06f8 / 0xb105
-- **Interface:** 0 (vendor-specific, not HID)
-- **Bulk IN endpoint:** 0x81 (EP1 IN), 38-byte state packets, 64-byte MPS
+- **Interface:** 1 (vendor-specific, per hdjd Linux driver)
+- **Bulk IN endpoint:** 0x82 (EP2 IN), 38-byte state packets, 64-byte MPS (auto-detected from descriptor)
 - **Init sequence:** 14 vendor-specific control transfers (see sample.ino)
 - **State format:** 38 bytes, bitmask-based for buttons, 0x00-0xFF for dials/sliders
 

@@ -23,4 +23,5 @@ idf_component_register(
         json
         led_strip
         spiffs
+        esp_timer
 )

@@ -8,7 +8,6 @@
 #include "http_server.h"
 #include "config_store.h"
 #include "mapping_engine.h"
-#include "tci_client.h"
 #include "cat_client.h"
 #include "usb_dj_host.h"
 #include "usb_debug.h"
@@ -62,7 +61,6 @@ void http_server_ws_broadcast(const char *json)
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "WS send failed fd=%d: %s, removing", s_ws_fds[i], esp_err_to_name(ret));
             ws_remove_client(s_ws_fds[i]);
-            // don't increment i, the swap put a new fd at position i
         } else {
             i++;
         }
@@ -86,37 +84,9 @@ void http_server_notify_control(
     http_server_ws_broadcast(buf);
 }
 
-void http_server_notify_radio(void)
-{
-    if (s_ws_count == 0) return;
-
-    const tci_radio_state_t *rs = tci_client_get_radio_state();
-    if (!rs) return;
-
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-        "{\"type\":\"radio\",\"vfo_a\":%ld,\"vfo_b\":%ld,\"mode\":\"%s\","
-        "\"drive\":%d,\"tx\":%s,\"mute\":%s,\"filter_low\":%d,\"filter_high\":%d}",
-        rs->vfo_a_freq, rs->vfo_b_freq, rs->mode,
-        rs->drive, rs->tx ? "true" : "false", rs->mute ? "true" : "false",
-        rs->filter_low, rs->filter_high);
-    http_server_ws_broadcast(buf);
-}
-
 void http_server_notify_status(void)
 {
     if (s_ws_count == 0) return;
-
-    const char *tci_str = "disconnected";
-    tci_state_t ts = tci_client_get_state();
-    switch (ts) {
-    case TCI_STATE_CONNECTING:        tci_str = "connecting"; break;
-    case TCI_STATE_WEBSOCKET_UPGRADE: tci_str = "upgrading"; break;
-    case TCI_STATE_CONNECTED:         tci_str = "connected"; break;
-    case TCI_STATE_READY:             tci_str = "ready"; break;
-    case TCI_STATE_ERROR:             tci_str = "error"; break;
-    default: break;
-    }
 
     const char *cat_str = "disconnected";
     cat_state_t cs = cat_client_get_state();
@@ -129,10 +99,21 @@ void http_server_notify_status(void)
 
     char buf[192];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"status\",\"usb\":%s,\"tci\":\"%s\",\"cat\":\"%s\",\"heap\":%lu}",
+        "{\"type\":\"status\",\"usb\":%s,\"cat\":\"%s\",\"heap\":%lu}",
         usb_dj_host_is_connected() ? "true" : "false",
-        tci_str, cat_str,
+        cat_str,
         esp_get_free_heap_size());
+    http_server_ws_broadcast(buf);
+}
+
+// ----- Learn mode callback (fires when a control is learned) -----
+
+static void on_learn_complete(const char *control_name, uint16_t command_id, const char *command_name)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "{\"type\":\"learned\",\"control\":\"%s\",\"command_id\":%d,\"command_name\":\"%s\"}",
+        control_name, command_id, command_name);
     http_server_ws_broadcast(buf);
 }
 
@@ -141,15 +122,12 @@ void http_server_notify_status(void)
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
-        // WebSocket handshake - register this client
         ws_add_client(httpd_req_to_sockfd(req));
-        // Send initial status
         http_server_notify_status();
-        http_server_notify_radio();
         return ESP_OK;
     }
 
-    // Receive a frame (client message)
+    // Receive a frame
     httpd_ws_frame_t pkt = { .type = HTTPD_WS_TYPE_TEXT };
     esp_err_t ret = httpd_ws_recv_frame(req, &pkt, 0);
     if (ret != ESP_OK) return ret;
@@ -162,7 +140,23 @@ static esp_err_t ws_handler(httpd_req_t *req)
         if (ret == ESP_OK) {
             buf[pkt.len] = '\0';
             ESP_LOGD(TAG, "WS recv: %s", (char *)buf);
-            // Could handle client commands here (e.g., ping)
+
+            // Parse incoming JSON commands
+            cJSON *msg = cJSON_Parse((char *)buf);
+            if (msg) {
+                cJSON *type = cJSON_GetObjectItem(msg, "type");
+                if (type && cJSON_IsString(type)) {
+                    if (strcmp(type->valuestring, "learn") == 0) {
+                        cJSON *cmd_id = cJSON_GetObjectItem(msg, "command_id");
+                        if (cmd_id && cJSON_IsNumber(cmd_id)) {
+                            mapping_engine_start_learn((uint16_t)cmd_id->valueint);
+                        }
+                    } else if (strcmp(type->valuestring, "learn_cancel") == 0) {
+                        mapping_engine_cancel_learn();
+                    }
+                }
+                cJSON_Delete(msg);
+            }
         }
         free(buf);
     }
@@ -180,37 +174,11 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "usb_updates", usb_debug_get_update_count());
     cJSON_AddNumberToObject(root, "usb_changes", usb_debug_get_change_count());
 
-    // TCI state
-    const char *tci_states[] = {"disconnected","connecting","upgrading","connected","ready","error"};
-    tci_state_t ts = tci_client_get_state();
-    cJSON_AddStringToObject(root, "tci_state",
-        (ts >= 0 && ts <= TCI_STATE_ERROR) ? tci_states[ts] : "unknown");
-
     // CAT state
     const char *cat_states[] = {"disconnected","connecting","connected","error"};
     cat_state_t cs = cat_client_get_state();
     cJSON_AddStringToObject(root, "cat_state",
         (cs >= 0 && cs <= CAT_STATE_ERROR) ? cat_states[cs] : "unknown");
-
-    // Radio state from TCI
-    const tci_radio_state_t *rs = tci_client_get_radio_state();
-    if (rs) {
-        cJSON *radio = cJSON_AddObjectToObject(root, "radio");
-        cJSON_AddNumberToObject(radio, "vfo_a", rs->vfo_a_freq);
-        cJSON_AddNumberToObject(radio, "vfo_b", rs->vfo_b_freq);
-        cJSON_AddStringToObject(radio, "mode", rs->mode);
-        cJSON_AddNumberToObject(radio, "drive", rs->drive);
-        cJSON_AddBoolToObject(radio, "tx", rs->tx);
-        cJSON_AddBoolToObject(radio, "mute", rs->mute);
-        cJSON_AddNumberToObject(radio, "filter_low", rs->filter_low);
-        cJSON_AddNumberToObject(radio, "filter_high", rs->filter_high);
-        cJSON_AddBoolToObject(radio, "power_on", rs->power_on);
-    }
-
-    // Protocol
-    char proto[8] = "tci";
-    config_get_str(CFG_KEY_PROTOCOL, proto, sizeof(proto));
-    cJSON_AddStringToObject(root, "protocol", proto);
 
     // WiFi
     cJSON_AddBoolToObject(root, "wifi_connected", wifi_manager_is_connected());
@@ -243,28 +211,14 @@ static esp_err_t api_config_get_handler(httpd_req_t *req)
     } else {
         cJSON_AddStringToObject(root, "wifi_ssid", "");
     }
-    // Don't expose password, just indicate if set
     cJSON_AddBoolToObject(root, "wifi_pass_set",
         config_get_str(CFG_KEY_WIFI_PASS, val, sizeof(val)) == ESP_OK && val[0] != '\0');
-
-    // Protocol
-    char proto[8] = "tci";
-    config_get_str(CFG_KEY_PROTOCOL, proto, sizeof(proto));
-    cJSON_AddStringToObject(root, "protocol", proto);
-
-    // TCI
-    val[0] = '\0';
-    config_get_str(CFG_KEY_TCI_HOST, val, sizeof(val));
-    cJSON_AddStringToObject(root, "tci_host", val);
-    uint16_t port = 50001;
-    config_get_u16(CFG_KEY_TCI_PORT, &port);
-    cJSON_AddNumberToObject(root, "tci_port", port);
 
     // CAT
     val[0] = '\0';
     config_get_str(CFG_KEY_CAT_HOST, val, sizeof(val));
     cJSON_AddStringToObject(root, "cat_host", val);
-    port = 31001;
+    uint16_t port = 31001;
     config_get_u16(CFG_KEY_CAT_PORT, &port);
     cJSON_AddNumberToObject(root, "cat_port", port);
 
@@ -318,7 +272,7 @@ static esp_err_t api_config_put_handler(httpd_req_t *req)
     }
 
     bool need_wifi_restart = false;
-    bool need_radio_restart = false;
+    bool need_reconnect = false;
 
     // WiFi SSID
     cJSON *item = cJSON_GetObjectItem(root, "wifi_ssid");
@@ -334,42 +288,16 @@ static esp_err_t api_config_put_handler(httpd_req_t *req)
         need_wifi_restart = true;
     }
 
-    // Protocol
-    item = cJSON_GetObjectItem(root, "protocol");
-    if (item && cJSON_IsString(item)) {
-        if (strcmp(item->valuestring, "tci") == 0 || strcmp(item->valuestring, "cat") == 0) {
-            char old_proto[8] = "tci";
-            config_get_str(CFG_KEY_PROTOCOL, old_proto, sizeof(old_proto));
-            if (strcmp(old_proto, item->valuestring) != 0) {
-                need_radio_restart = true;
-            }
-            config_set_str(CFG_KEY_PROTOCOL, item->valuestring);
-            mapping_engine_set_protocol(strcmp(item->valuestring, "tci") == 0);
-        }
-    }
-
-    // TCI host/port
-    item = cJSON_GetObjectItem(root, "tci_host");
-    if (item && cJSON_IsString(item)) {
-        config_set_str(CFG_KEY_TCI_HOST, item->valuestring);
-        need_radio_restart = true;
-    }
-    item = cJSON_GetObjectItem(root, "tci_port");
-    if (item && cJSON_IsNumber(item)) {
-        config_set_u16(CFG_KEY_TCI_PORT, (uint16_t)item->valueint);
-        need_radio_restart = true;
-    }
-
     // CAT host/port
     item = cJSON_GetObjectItem(root, "cat_host");
     if (item && cJSON_IsString(item)) {
         config_set_str(CFG_KEY_CAT_HOST, item->valuestring);
-        need_radio_restart = true;
+        need_reconnect = true;
     }
     item = cJSON_GetObjectItem(root, "cat_port");
     if (item && cJSON_IsNumber(item)) {
         config_set_u16(CFG_KEY_CAT_PORT, (uint16_t)item->valueint);
-        need_radio_restart = true;
+        need_reconnect = true;
     }
 
     // Debug level
@@ -385,7 +313,7 @@ static esp_err_t api_config_put_handler(httpd_req_t *req)
     // Response
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", true);
-    cJSON_AddBoolToObject(resp, "restart_required", need_wifi_restart || need_radio_restart);
+    cJSON_AddBoolToObject(resp, "restart_required", need_wifi_restart || need_reconnect);
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
 
@@ -407,6 +335,33 @@ static esp_err_t api_config_put_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ----- REST API: GET /api/commands -----
+
+static esp_err_t api_commands_get_handler(httpd_req_t *req)
+{
+    int count = 0;
+    const thetis_cmd_t *db = cmd_db_get_all(&count);
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < count; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "id", db[i].id);
+        cJSON_AddStringToObject(obj, "name", db[i].name);
+        cJSON_AddNumberToObject(obj, "cat", db[i].category);
+        cJSON_AddStringToObject(obj, "cat_name", cmd_category_name(db[i].category));
+        cJSON_AddNumberToObject(obj, "exec", db[i].exec_type);
+        cJSON_AddItemToArray(arr, obj);
+    }
+
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
+
 // ----- REST API: GET /api/mappings -----
 
 static esp_err_t api_mappings_get_handler(httpd_req_t *req)
@@ -417,13 +372,16 @@ static esp_err_t api_mappings_get_handler(httpd_req_t *req)
     cJSON *arr = cJSON_CreateArray();
     for (int i = 0; i < count; i++) {
         cJSON *entry = cJSON_CreateObject();
-        cJSON_AddStringToObject(entry, "control", table[i].control_name);
-        cJSON_AddNumberToObject(entry, "action", table[i].action);
-        cJSON_AddNumberToObject(entry, "param_int", table[i].param_int);
-        if (table[i].param_str[0] != '\0') {
-            cJSON_AddStringToObject(entry, "param_str", table[i].param_str);
+        cJSON_AddStringToObject(entry, "c", table[i].control_name);
+        cJSON_AddNumberToObject(entry, "id", table[i].command_id);
+        if (table[i].param != 0) {
+            cJSON_AddNumberToObject(entry, "p", table[i].param);
         }
-        cJSON_AddNumberToObject(entry, "rx", table[i].rx);
+        // Include command name for UI convenience
+        const thetis_cmd_t *cmd = cmd_db_find(table[i].command_id);
+        if (cmd) {
+            cJSON_AddStringToObject(entry, "name", cmd->name);
+        }
         cJSON_AddItemToArray(arr, entry);
     }
 
@@ -478,31 +436,24 @@ static esp_err_t api_mappings_put_handler(httpd_req_t *req)
     int applied = 0;
     cJSON *item;
     cJSON_ArrayForEach(item, arr) {
-        cJSON *ctrl = cJSON_GetObjectItem(item, "control");
-        cJSON *action = cJSON_GetObjectItem(item, "action");
-        if (!ctrl || !cJSON_IsString(ctrl) || !action || !cJSON_IsNumber(action)) continue;
+        cJSON *c = cJSON_GetObjectItem(item, "c");
+        cJSON *id = cJSON_GetObjectItem(item, "id");
+        if (!c || !cJSON_IsString(c) || !id || !cJSON_IsNumber(id)) continue;
 
         mapping_entry_t entry = {0};
-        strncpy(entry.control_name, ctrl->valuestring, sizeof(entry.control_name) - 1);
-        entry.action = (mapping_action_t)action->valueint;
+        strncpy(entry.control_name, c->valuestring, sizeof(entry.control_name) - 1);
+        entry.command_id = (uint16_t)id->valuedouble;
 
-        cJSON *pi = cJSON_GetObjectItem(item, "param_int");
-        if (pi && cJSON_IsNumber(pi)) entry.param_int = pi->valueint;
+        cJSON *p = cJSON_GetObjectItem(item, "p");
+        if (p && cJSON_IsNumber(p)) entry.param = (int32_t)p->valuedouble;
 
-        cJSON *ps = cJSON_GetObjectItem(item, "param_str");
-        if (ps && cJSON_IsString(ps)) {
-            strncpy(entry.param_str, ps->valuestring, sizeof(entry.param_str) - 1);
+        if (cmd_db_find(entry.command_id) && mapping_engine_set(&entry) == ESP_OK) {
+            applied++;
         }
-
-        cJSON *rx = cJSON_GetObjectItem(item, "rx");
-        if (rx && cJSON_IsNumber(rx)) entry.rx = (uint8_t)rx->valueint;
-
-        if (mapping_engine_set(&entry) == ESP_OK) applied++;
     }
 
     cJSON_Delete(arr);
 
-    // Save to NVS
     esp_err_t save_ret = mapping_engine_save();
 
     cJSON *resp = cJSON_CreateObject();
@@ -523,6 +474,138 @@ static esp_err_t api_mappings_reset_handler(httpd_req_t *req)
 {
     mapping_engine_reset_defaults();
     esp_err_t ret = mapping_engine_save();
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", ret == ESP_OK);
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
+
+// ----- REST API: GET /api/mappings/download -----
+
+static esp_err_t api_mappings_download_handler(httpd_req_t *req)
+{
+    struct stat st;
+    if (stat("/www/mappings.json", &st) != 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No mappings file");
+        return ESP_FAIL;
+    }
+
+    FILE *f = fopen("/www/mappings.json", "r");
+    if (!f) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open file");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"mappings.json\"");
+
+    char buf[512];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) {
+            fclose(f);
+            httpd_resp_send_chunk(req, NULL, 0);
+            return ESP_FAIL;
+        }
+    }
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ----- REST API: POST /api/mappings/upload -----
+
+static esp_err_t api_mappings_upload_handler(httpd_req_t *req)
+{
+    int total_len = req->content_len;
+    if (total_len <= 0 || total_len > 8192) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length");
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(total_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    int received = 0;
+    while (received < total_len) {
+        int ret = httpd_req_recv(req, buf + received, total_len - received);
+        if (ret <= 0) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive failed");
+            return ESP_FAIL;
+        }
+        received += ret;
+    }
+    buf[total_len] = '\0';
+
+    // Validate JSON
+    cJSON *arr = cJSON_Parse(buf);
+    if (!arr || !cJSON_IsArray(arr)) {
+        if (arr) cJSON_Delete(arr);
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON array");
+        return ESP_FAIL;
+    }
+    cJSON_Delete(arr);
+
+    // Write to SPIFFS
+    FILE *f = fopen("/www/mappings.json", "w");
+    if (!f) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to write file");
+        return ESP_FAIL;
+    }
+    fwrite(buf, 1, total_len, f);
+    fclose(f);
+    free(buf);
+
+    // Reload mappings from the file
+    mapping_engine_load();
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", true);
+    int count = 0;
+    mapping_engine_get_table(&count);
+    cJSON_AddNumberToObject(resp, "loaded", count);
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
+
+// ----- REST API: DELETE /api/mappings/:control -----
+
+static esp_err_t api_mapping_delete_handler(httpd_req_t *req)
+{
+    // URI is /api/mappings/clear?c=<control_name>
+    char query[64] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing query param ?c=name");
+        return ESP_FAIL;
+    }
+
+    char control[24] = {0};
+    if (httpd_query_key_value(query, "c", control, sizeof(control)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing ?c= parameter");
+        return ESP_FAIL;
+    }
+
+    esp_err_t ret = mapping_engine_remove(control);
+    if (ret == ESP_OK) {
+        mapping_engine_save();
+    }
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", ret == ESP_OK);
@@ -556,11 +639,10 @@ static const char *get_mime_type(const char *path)
 
 static esp_err_t static_file_handler_internal(httpd_req_t *req);
 
-// Captive portal detection: redirect non-local requests to our setup page in AP mode
+// Captive portal detection
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
     if (wifi_manager_is_ap_mode()) {
-        // Check Host header - if it's not our IP or hostname, redirect
         char host[64] = {0};
         httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host));
         if (host[0] != '\0'
@@ -573,11 +655,9 @@ static esp_err_t captive_portal_handler(httpd_req_t *req)
             return ESP_OK;
         }
     }
-    // Fall through to normal static file serving
     return static_file_handler_internal(req);
 }
 
-// Check if client accepts gzip encoding
 static bool client_accepts_gzip(httpd_req_t *req)
 {
     char accept[128] = {0};
@@ -602,10 +682,15 @@ static esp_err_t static_file_handler_internal(httpd_req_t *req)
         snprintf(filepath, sizeof(filepath), "/www%.*s", (int)uri_len, uri);
     }
 
-    // Try the exact path first
+    // Don't serve mappings.json as a static file (API handles it)
+    if (strcmp(filepath, "/www/mappings.json") == 0) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Use /api/mappings");
+        return ESP_FAIL;
+    }
+
     struct stat st;
     if (stat(filepath, &st) != 0) {
-        // SPA fallback: serve index.html for non-file paths
+        // SPA fallback
         snprintf(filepath, sizeof(filepath), "/www/index.html");
         if (stat(filepath, &st) != 0) {
             httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");
@@ -613,7 +698,7 @@ static esp_err_t static_file_handler_internal(httpd_req_t *req)
         }
     }
 
-    // Try serving pre-compressed .gz version if client accepts it
+    // Try gzip version
     bool serving_gzip = false;
     char gzpath[132];
     if (client_accepts_gzip(req)) {
@@ -635,7 +720,6 @@ static esp_err_t static_file_handler_internal(httpd_req_t *req)
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     }
 
-    // Enable caching for static assets (not index.html)
     if (strstr(filepath, "index.html") == NULL) {
         httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=86400");
     }
@@ -654,15 +738,14 @@ static esp_err_t static_file_handler_internal(httpd_req_t *req)
     return ESP_OK;
 }
 
-// ----- Socket close handler (cleanup WS clients) -----
+// ----- Socket close handler -----
 
 static void on_sock_close(httpd_handle_t hd, int sockfd)
 {
     ws_remove_client(sockfd);
-    // ESP-IDF httpd closes the socket internally - don't double-close
 }
 
-// ----- SPIFFS mount/unmount -----
+// ----- SPIFFS mount -----
 
 static esp_err_t mount_spiffs(void)
 {
@@ -693,14 +776,16 @@ static esp_err_t mount_spiffs(void)
 
 esp_err_t http_server_init(void)
 {
-    // Mount SPIFFS for static files (non-fatal if no partition/files yet)
     esp_err_t spiffs_ret = mount_spiffs();
     if (spiffs_ret != ESP_OK) {
         ESP_LOGW(TAG, "SPIFFS not available - static file serving disabled");
     }
 
+    // Register learn mode callback
+    mapping_engine_set_learn_callback(on_learn_complete);
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.close_fn = on_sock_close;
     config.stack_size = 8192;
@@ -722,18 +807,22 @@ esp_err_t http_server_init(void)
 
     // REST API endpoints
     httpd_uri_t api_uris[] = {
-        { .uri = "/api/status",         .method = HTTP_GET,  .handler = api_status_get_handler },
-        { .uri = "/api/config",         .method = HTTP_GET,  .handler = api_config_get_handler },
-        { .uri = "/api/config",         .method = HTTP_PUT,  .handler = api_config_put_handler },
-        { .uri = "/api/mappings",       .method = HTTP_GET,  .handler = api_mappings_get_handler },
-        { .uri = "/api/mappings",       .method = HTTP_PUT,  .handler = api_mappings_put_handler },
-        { .uri = "/api/mappings/reset", .method = HTTP_POST, .handler = api_mappings_reset_handler },
+        { .uri = "/api/status",            .method = HTTP_GET,  .handler = api_status_get_handler },
+        { .uri = "/api/config",            .method = HTTP_GET,  .handler = api_config_get_handler },
+        { .uri = "/api/config",            .method = HTTP_PUT,  .handler = api_config_put_handler },
+        { .uri = "/api/commands",          .method = HTTP_GET,  .handler = api_commands_get_handler },
+        { .uri = "/api/mappings",          .method = HTTP_GET,  .handler = api_mappings_get_handler },
+        { .uri = "/api/mappings",          .method = HTTP_PUT,  .handler = api_mappings_put_handler },
+        { .uri = "/api/mappings/reset",    .method = HTTP_POST, .handler = api_mappings_reset_handler },
+        { .uri = "/api/mappings/download", .method = HTTP_GET,  .handler = api_mappings_download_handler },
+        { .uri = "/api/mappings/upload",   .method = HTTP_POST, .handler = api_mappings_upload_handler },
+        { .uri = "/api/mappings/clear",    .method = HTTP_POST, .handler = api_mapping_delete_handler },
     };
     for (int i = 0; i < sizeof(api_uris) / sizeof(api_uris[0]); i++) {
         httpd_register_uri_handler(s_server, &api_uris[i]);
     }
 
-    // Static file catch-all (must be registered last due to wildcard)
+    // Static file catch-all (must be last)
     if (spiffs_ret == ESP_OK) {
         httpd_uri_t static_uri = {
             .uri = "/*",

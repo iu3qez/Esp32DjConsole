@@ -24,6 +24,10 @@ export function putConfig(config) {
   return request('PUT', '/api/config', config);
 }
 
+export function getCommands() {
+  return request('GET', '/api/commands');
+}
+
 export function getMappings() {
   return request('GET', '/api/mappings');
 }
@@ -34,4 +38,26 @@ export function putMappings(mappings) {
 
 export function resetMappings() {
   return request('POST', '/api/mappings/reset');
+}
+
+export function clearMapping(controlName) {
+  return request('POST', `/api/mappings/clear?c=${encodeURIComponent(controlName)}`);
+}
+
+export function downloadMappings() {
+  // Trigger browser file download
+  const a = document.createElement('a');
+  a.href = '/api/mappings/download';
+  a.download = 'mappings.json';
+  a.click();
+}
+
+export async function uploadMappings(jsonText) {
+  const res = await fetch('/api/mappings/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: jsonText,
+  });
+  if (!res.ok) throw new Error(`Upload: ${res.status} ${res.statusText}`);
+  return res.json();
 }

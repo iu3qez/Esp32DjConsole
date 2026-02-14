@@ -6,78 +6,87 @@
 #include "usb_dj_host.h"
 
 /**
- * Mapping Engine - translates DJ console control events to TCI/CAT commands.
+ * Mapping Engine - maps DJ console controls to Thetis CAT commands.
  *
- * Each DJ control (button, dial, encoder) maps to an action that generates
- * one or more TCI or CAT commands. The mapping table is stored in NVS as JSON
- * and can be edited via the web GUI.
+ * Features:
+ *   - Static database of ~80 Thetis commands with CAT prefixes
+ *   - MIDI-learn mode: select command, move control, mapping created
+ *   - Mappings saved to SPIFFS as JSON
+ *   - Download/upload for backup
  */
 
-/**
- * Action types for DJ control mappings.
- */
+// ---------------------------------------------------------------------------
+// Thetis command database
+// ---------------------------------------------------------------------------
+
+/** How the CAT command is executed when a DJ control changes. */
 typedef enum {
-    MAP_ACTION_NONE = 0,       // Unmapped (ignore)
+    CMD_CAT_BUTTON,   // Send on press only (e.g., ZZBU;)
+    CMD_CAT_TOGGLE,   // Track state, send ZZXX0/ZZXX1 on press
+    CMD_CAT_SET,      // Knob/slider: scale 0-255 -> value_min..value_max
+    CMD_CAT_FREQ,     // Encoder: delta * param Hz, send ZZFA{11-digit freq}
+    CMD_CAT_WHEEL,    // Encoder: relative inc/dec via two CAT commands
+} cmd_exec_type_t;
 
-    // Frequency
-    MAP_ACTION_VFO_A_STEP,     // Encoder/dial -> VFO A freq step (param: Hz per tick)
-    MAP_ACTION_VFO_B_STEP,     // Encoder/dial -> VFO B freq step
-    MAP_ACTION_VFO_A_DIRECT,   // Dial -> VFO A frequency (scaled to band)
-    MAP_ACTION_BAND_SELECT,    // Button -> jump to band preset (param: freq in Hz)
+/** Command categories for UI grouping. */
+typedef enum {
+    CAT_VFO = 0,
+    CAT_BAND,
+    CAT_MODE,
+    CAT_TX,
+    CAT_AUDIO,
+    CAT_FILTER,
+    CAT_NR_NB,
+    CAT_AGC,
+    CAT_SPLIT_RIT,
+    CAT_CW,
+    CAT_MISC,
+    CAT_CATEGORY_COUNT,
+} cmd_category_t;
 
-    // Mode
-    MAP_ACTION_MODE_SET,       // Button -> set specific mode (param: mode string)
-    MAP_ACTION_MODE_CYCLE,     // Button -> cycle through mode list
-
-    // Audio
-    MAP_ACTION_VOLUME,         // Dial -> volume (0-100 linear from 0x00-0xFF)
-    MAP_ACTION_VOLUME_STEP,    // Encoder -> volume step (param: step size)
-
-    // TX
-    MAP_ACTION_PTT_TOGGLE,     // Button -> toggle TX on/off
-    MAP_ACTION_PTT_MOMENTARY,  // Button -> TX while pressed
-    MAP_ACTION_TUNE_TOGGLE,    // Button -> toggle tune
-    MAP_ACTION_DRIVE,          // Dial -> TX drive (0-100)
-    MAP_ACTION_DRIVE_STEP,     // Encoder -> drive step
-
-    // Filter/EQ
-    MAP_ACTION_FILTER_WIDTH,   // Dial -> filter bandwidth (scaled)
-    MAP_ACTION_FILTER_SHIFT,   // Encoder -> filter shift
-
-    // Misc
-    MAP_ACTION_MUTE_TOGGLE,    // Button -> toggle mute
-    MAP_ACTION_SPLIT_TOGGLE,   // Button -> toggle split
-
-    // Custom
-    MAP_ACTION_CUSTOM_TCI,     // Send arbitrary TCI command (param: command template)
-    MAP_ACTION_CUSTOM_CAT,     // Send arbitrary CAT command (param: command template)
-
-    MAP_ACTION_COUNT
-} mapping_action_t;
-
-/**
- * A single control-to-action mapping entry.
- */
+/** A single Thetis command definition (ROM, static const). */
 typedef struct {
-    char               control_name[24]; // DJ control name (e.g., "Jog_A", "Play_A")
-    mapping_action_t   action;
-    int32_t            param_int;        // Integer parameter (Hz step, band freq, mode code)
-    char               param_str[32];    // String parameter (mode name, custom command template)
-    uint8_t            rx;               // Target receiver (0 or 1)
+    uint16_t         id;           // Unique ID (stable across firmware versions)
+    const char      *name;         // Human-readable: "VFO A Tune", "Band Up"
+    cmd_category_t   category;
+    cmd_exec_type_t  exec_type;
+    const char      *cat_cmd;      // CAT prefix: "ZZFA", "ZZBU", etc.
+    const char      *cat_cmd2;     // Second cmd for WHEEL dec (NULL if unused)
+    int              value_digits;  // 0=no param, 1-11=zero-padded digits
+    int              value_min;
+    int              value_max;
+} thetis_cmd_t;
+
+/** Get the full command database array and its size. */
+const thetis_cmd_t *cmd_db_get_all(int *count);
+
+/** Look up a command by ID. Returns NULL if not found. */
+const thetis_cmd_t *cmd_db_find(uint16_t id);
+
+/** Get human-readable category name. */
+const char *cmd_category_name(cmd_category_t cat);
+
+// ---------------------------------------------------------------------------
+// Mapping entries
+// ---------------------------------------------------------------------------
+
+/** A single control-to-command mapping. */
+typedef struct {
+    char     control_name[24];  // DJ control: "Jog_A", "Play_A", etc.
+    uint16_t command_id;        // Thetis command ID from database
+    int32_t  param;             // Step size (Hz for VFO), or 0 for default
 } mapping_entry_t;
 
 #define MAX_MAPPINGS 64
 
-/**
- * Initialize the mapping engine with default mappings.
- * Call after usb_dj_host_init() and tci/cat client init.
- */
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/** Initialize: load mappings from SPIFFS, fall back to defaults. */
 esp_err_t mapping_engine_init(void);
 
-/**
- * DJ control change callback - connect this to usb_dj_host_init().
- * Looks up the mapping and dispatches the appropriate TCI/CAT command.
- */
+/** DJ control change callback - dispatches CAT command per mapping. */
 void mapping_engine_on_control(
     const char *name,
     dj_control_type_t control_type,
@@ -85,41 +94,44 @@ void mapping_engine_on_control(
     uint8_t old_value,
     uint8_t new_value);
 
-/**
- * Get the current mapping table (read-only).
- */
+/** Get the current mapping table (read-only). */
 const mapping_entry_t *mapping_engine_get_table(int *count);
 
-/**
- * Set a mapping entry by control name. Overwrites if exists, appends if new.
- * Returns ESP_ERR_NO_MEM if table is full.
- */
+/** Set a mapping entry by control name. Overwrites if exists, appends if new. */
 esp_err_t mapping_engine_set(const mapping_entry_t *entry);
 
-/**
- * Remove a mapping by control name.
- */
+/** Remove a mapping by control name. */
 esp_err_t mapping_engine_remove(const char *control_name);
 
-/**
- * Save current mappings to NVS.
- */
+/** Save current mappings to SPIFFS. */
 esp_err_t mapping_engine_save(void);
 
-/**
- * Load mappings from NVS (replaces current table).
- * Returns ESP_ERR_NOT_FOUND if no saved mappings exist (defaults remain).
- */
+/** Load mappings from SPIFFS. Returns ESP_ERR_NOT_FOUND if no file. */
 esp_err_t mapping_engine_load(void);
 
-/**
- * Reset to default mappings (does not save to NVS).
- */
+/** Reset to default mappings and save. */
 void mapping_engine_reset_defaults(void);
 
+// ---------------------------------------------------------------------------
+// MIDI Learn mode
+// ---------------------------------------------------------------------------
+
+/** Start learn mode: next DJ control change creates a mapping to command_id. */
+void mapping_engine_start_learn(uint16_t command_id);
+
+/** Check if learn mode is active. */
+bool mapping_engine_is_learning(void);
+
+/** Cancel learn mode without creating a mapping. */
+void mapping_engine_cancel_learn(void);
+
 /**
- * Set which protocol to use for dispatching commands.
- * @param use_tci  true = TCI (WebSocket), false = CAT (TCP)
+ * Callback fired when learn mode completes (a control was moved).
+ * Set via mapping_engine_set_learn_callback().
  */
-void mapping_engine_set_protocol(bool use_tci);
-bool mapping_engine_get_protocol(void);
+typedef void (*mapping_learn_callback_t)(
+    const char *control_name,
+    uint16_t command_id,
+    const char *command_name);
+
+void mapping_engine_set_learn_callback(mapping_learn_callback_t cb);

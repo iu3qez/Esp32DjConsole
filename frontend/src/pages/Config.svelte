@@ -6,8 +6,6 @@
 
   let cfg = $state({
     wifi_ssid: '', wifi_pass: '', wifi_pass_set: false,
-    protocol: 'tci',
-    tci_host: '', tci_port: 50001,
     cat_host: '', cat_port: 31001,
     debug_level: 1,
   });
@@ -27,9 +25,6 @@
     saving = true;
     const update = {
       wifi_ssid: cfg.wifi_ssid,
-      protocol: cfg.protocol,
-      tci_host: cfg.tci_host,
-      tci_port: cfg.tci_port,
       cat_host: cfg.cat_host,
       cat_port: cfg.cat_port,
       debug_level: cfg.debug_level,
@@ -58,26 +53,10 @@
   </label>
 </div>
 
-<h2>Radio Connection</h2>
+<h2>Thetis CAT Connection</h2>
 <div class="form">
-  <label>Protocol
-    <select bind:value={cfg.protocol}>
-      <option value="tci">TCI (WebSocket)</option>
-      <option value="cat">CAT (TCP)</option>
-    </select>
-  </label>
-
-  <fieldset>
-    <legend>TCI</legend>
-    <label>Host <input type="text" bind:value={cfg.tci_host} placeholder="192.168.1.100" /></label>
-    <label>Port <input type="number" bind:value={cfg.tci_port} /></label>
-  </fieldset>
-
-  <fieldset>
-    <legend>CAT</legend>
-    <label>Host <input type="text" bind:value={cfg.cat_host} placeholder="192.168.1.100" /></label>
-    <label>Port <input type="number" bind:value={cfg.cat_port} /></label>
-  </fieldset>
+  <label>Host <input type="text" bind:value={cfg.cat_host} placeholder="192.168.1.100" /></label>
+  <label>Port <input type="number" bind:value={cfg.cat_port} /></label>
 </div>
 
 <h2>Debug</h2>
@@ -97,7 +76,7 @@
 {#if showConfirm}
   <ConfirmDialog
     title="Save Configuration"
-    message="Changing WiFi or radio settings may require a device restart. Continue?"
+    message="Changing WiFi or CAT settings may require a device restart. Continue?"
     onconfirm={doSave}
     oncancel={() => showConfirm = false}
   />
@@ -111,11 +90,6 @@
     padding: 0.4rem; background: #16213e; border: 1px solid #0f3460;
     color: #e0e0e0; border-radius: 4px; font-size: 0.85rem;
   }
-  fieldset {
-    border: 1px solid #0f3460; border-radius: 6px; padding: 0.5rem 0.75rem;
-    display: flex; flex-direction: column; gap: 0.4rem;
-  }
-  legend { color: #888; font-size: 0.75rem; padding: 0 0.3rem; }
   .save {
     margin-top: 1rem; width: 100%; padding: 0.6rem;
     background: #0f3460; color: #e0e0e0; border: none;
