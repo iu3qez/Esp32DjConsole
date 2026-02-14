@@ -334,6 +334,10 @@ static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
         cat_client_send(buf);
         notify_cat(control_name, cmd, buf);
         ESP_LOGI(TAG, "CMD [%s] -> %s", cmd->name, buf);
+        // Re-query step after ZZSU/ZZSD so local step stays in sync
+        if (strcmp(cmd->cat_cmd, "ZZSU") == 0 || strcmp(cmd->cat_cmd, "ZZSD") == 0) {
+            cat_client_send("ZZAC;");
+        }
         break;
 
     case CMD_CAT_TOGGLE: {
@@ -783,5 +787,7 @@ void mapping_engine_request_sync(void)
     s_vfo_b_synced = false;
     cat_client_send("ZZFA;");
     cat_client_send("ZZFB;");
+    // Set tuning step to lowest (index 0 = 1 Hz), then query back to confirm
+    cat_client_send("ZZAC00;");
     cat_client_send("ZZAC;");
 }
