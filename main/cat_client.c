@@ -39,6 +39,29 @@ static bool                s_stop_requested = false;
 static char s_msg_buf[CAT_RX_BUF_SIZE];
 static int  s_msg_len = 0;
 
+// Sent command ring buffer — tracks last N commands for error correlation
+#define SENT_RING_SIZE 8
+static char s_sent_ring[SENT_RING_SIZE][CAT_MAX_CMD_LEN];
+static int  s_sent_ring_head = 0;
+static int  s_sent_ring_count = 0;
+
+static void track_sent(const char *cmd)
+{
+    strncpy(s_sent_ring[s_sent_ring_head], cmd, CAT_MAX_CMD_LEN - 1);
+    s_sent_ring[s_sent_ring_head][CAT_MAX_CMD_LEN - 1] = '\0';
+    s_sent_ring_head = (s_sent_ring_head + 1) % SENT_RING_SIZE;
+    if (s_sent_ring_count < SENT_RING_SIZE) s_sent_ring_count++;
+}
+
+static void dump_recent_sent(void)
+{
+    ESP_LOGW(TAG, "Recent sent commands (%d):", s_sent_ring_count);
+    for (int i = 0; i < s_sent_ring_count; i++) {
+        int idx = (s_sent_ring_head - s_sent_ring_count + i + SENT_RING_SIZE) % SENT_RING_SIZE;
+        ESP_LOGW(TAG, "  [%d] %s", i, s_sent_ring[idx]);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -71,9 +94,10 @@ static void process_cat_message(const char *msg, int len)
         return;
     }
 
-    // Error response
+    // Error response — dump recent sent commands so we know what caused it
     if (msg[0] == '?' || msg[0] == 'E' || msg[0] == 'O') {
-        ESP_LOGW(TAG, "CAT error: %s", msg);
+        ESP_LOGW(TAG, "CAT error response: \"%s\"", msg);
+        dump_recent_sent();
         return;
     }
 
@@ -85,7 +109,7 @@ static void process_cat_message(const char *msg, int len)
 
         const char *value = (len > 4) ? msg + 4 : "";
 
-        ESP_LOGD(TAG, "Response: %s = %s", cmd, value);
+        ESP_LOGI(TAG, "RX: %s = \"%s\"", cmd, value);
 
         if (s_config.response_cb) {
             s_config.response_cb(cmd, value);
@@ -101,7 +125,7 @@ static void process_cat_message(const char *msg, int len)
 
         const char *value = (len > 2) ? msg + 2 : "";
 
-        ESP_LOGD(TAG, "Response: %s = %s", cmd, value);
+        ESP_LOGI(TAG, "RX: %s = \"%s\"", cmd, value);
 
         if (s_config.response_cb) {
             s_config.response_cb(cmd, value);
@@ -232,7 +256,6 @@ static void cat_client_task(void *arg)
             }
 
             rx_buf[n] = '\0';
-            ESP_LOGD(TAG, "RX (%d bytes): %s", n, rx_buf);
             process_incoming_data(rx_buf, n);
         }
 
@@ -329,7 +352,8 @@ esp_err_t cat_client_send(const char *cmd)
     }
 
     len = strlen(buf);
-    ESP_LOGD(TAG, "TX: %s", buf);
+    ESP_LOGI(TAG, "TX: %s", buf);
+    track_sent(buf);
 
     int sent = 0;
     while (sent < len) {
