@@ -5,7 +5,6 @@ idf_component_register(
         "status_led.c"
         "usb_dj_host.c"
         "usb_debug.c"
-        "tci_client.c"
         "cat_client.c"
         "config_store.c"
         "mapping_engine.c"

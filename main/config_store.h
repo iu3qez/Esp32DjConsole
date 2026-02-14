@@ -14,12 +14,8 @@
 // Keys
 #define CFG_KEY_WIFI_SSID    "wifi_ssid"
 #define CFG_KEY_WIFI_PASS    "wifi_pass"
-#define CFG_KEY_TCI_HOST     "tci_host"
-#define CFG_KEY_TCI_PORT     "tci_port"
 #define CFG_KEY_CAT_HOST     "cat_host"
 #define CFG_KEY_CAT_PORT     "cat_port"
-#define CFG_KEY_PROTOCOL     "protocol"    // "tci" or "cat"
-#define CFG_KEY_MAPPINGS     "mappings"    // JSON blob
 #define CFG_KEY_DEBUG_LEVEL  "debug_lvl"
 
 /**
