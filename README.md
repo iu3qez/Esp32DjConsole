@@ -30,12 +30,9 @@ Every knob, slider, button, and jog wheel on the DJ console maps to a radio comm
 
 ### Wiring
 
-| ESP32-S3 | USB Cable |
-|----------|-----------|
-| GPIO 19  | D- (white) |
-| GPIO 20  | D+ (green) |
-| GND      | GND (black) |
-| External 5V | VBUS (red) |
+Plug a USB cable from your ESP32-S3 board to the DJ Console. 
+For powering you have two options: 5 volt in your board or use the second USB port of your board (if any...)
+
 
 ## Building
 

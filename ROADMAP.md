@@ -5,6 +5,15 @@
 _No current goal. Next planned item will be promoted on next planning session._
 
 ## Completed
+- [x] Add live CAT command ticker bar showing TX/RX commands (2026-02-15) `653ed7f`
+- [x] Add VFO idle-resync to prevent band jumps after Thetis frequency changes (2026-02-15) `eb47f80`
+- [x] Fix ZZSF format, encoder filter width, and mapping persistence (2026-02-15) `2059918`
+- [x] Fix ZZSF filter width, add encoder-relative SET mode, add CAT console (2026-02-15) `1a30a9d`
+- [x] Fix WebSocket socket leak and improve Mappings page (2026-02-15) `b75926d`
+- [x] Fix default mapping IDs and overlay user mappings on top of defaults (2026-02-15) `afee184`
+- [x] Add CMD_CAT_FILTER_WIDTH exec type for knob-controlled filter width via ZZSF (2026-02-15) `eeeefe1`
+- [x] Fix /api/commands JSON truncation by using chunked responses (2026-02-15) `5cc2ab5`
+- [x] Update README and roadmap with current project state (2026-02-15) `bb6f479`
 - [x] Fix command names, exec_type detection, and add description tooltips (2026-02-15) `a2c6a9f`
 - [x] OTA firmware update support (2026-02-15)
 - [x] WiFi AP mode captive portal improvements (2026-02-15)
