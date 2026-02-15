@@ -9,7 +9,7 @@
  * Mapping Engine - maps DJ console controls to Thetis CAT commands.
  *
  * Features:
- *   - Static database of ~80 Thetis commands with CAT prefixes
+ *   - Auto-generated database of ~300+ Thetis commands (from CATCommands.cs)
  *   - MIDI-learn mode: select command, move control, mapping created
  *   - Mappings saved to SPIFFS as JSON
  *   - Download/upload for backup
