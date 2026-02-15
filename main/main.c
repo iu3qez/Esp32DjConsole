@@ -137,18 +137,18 @@ void app_main(void)
         ESP_LOGI(TAG, "USB host started (debug level %d)", usb_debug_get_level());
     }
 
+    // Start HTTP server (mounts SPIFFS — must happen before mapping_engine_init)
+    ret = http_server_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP server init failed: %s", esp_err_to_name(ret));
+    }
+
     // Initialize mapping engine (loads from SPIFFS or uses defaults)
     mapping_engine_init();
 
     // Start CAT client if WiFi is connected and host configured
     if (wifi_manager_is_connected()) {
         start_cat_client();
-    }
-
-    // Start HTTP server
-    ret = http_server_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "HTTP server init failed: %s", esp_err_to_name(ret));
     }
 
     ESP_LOGI(TAG, "System ready. Free heap: %lu bytes", esp_get_free_heap_size());

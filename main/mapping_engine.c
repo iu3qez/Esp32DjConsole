@@ -79,6 +79,7 @@ static bool s_vfo_b_synced = false;
 // Filter edge tracking for FILTER_WIDTH exec type (synced from Thetis ZZFH/ZZFL)
 static int s_filter_hi = 1000;   // default upper (updated from ZZFH)
 static int s_filter_lo = 25;     // default lower (updated from ZZFL)
+static int s_filter_width = 0;   // tracked width for encoder-relative mode (0 = use current edges)
 static bool s_filter_synced = false;  // must sync from Thetis before first use
 
 // Tuning step from Thetis ZZAC response (index 0-25 -> Hz)
@@ -408,31 +409,53 @@ static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
     }
 
     case CMD_CAT_FILTER_WIDTH: {
-        // Scale 0-255 knob to width range (value_min..value_max, default 50-6000 Hz)
+        ESP_LOGI(TAG, "FW_DBG [%s] tick: ctrl_type=%d old=%d new=%d, synced=%d, lo=%d hi=%d width=%d",
+                 control_name, ctrl_type, old_val, new_val, s_filter_synced,
+                 s_filter_lo, s_filter_hi, s_filter_width);
         if (!s_filter_synced) {
-            // First touch: query Thetis for actual filter edges, skip this tick
             cat_client_send("ZZFH;");
             cat_client_send("ZZFL;");
-            ESP_LOGW(TAG, "FILTER_WIDTH [%s] querying ZZFH/ZZFL — skipping first tick", cmd->name);
+            ESP_LOGW(TAG, "FW_DBG [%s] NOT SYNCED — querying ZZFH/ZZFL, skipping tick", cmd->name);
             break;
         }
         int wmin = cmd->value_min > 0 ? cmd->value_min : 50;
         int wmax = cmd->value_max > 0 ? cmd->value_max : 6000;
-        int width = wmin + (new_val * (wmax - wmin)) / 255;
-        // Compute center from current filter edges, derive new lo/hi
+        int step = (param > 0) ? param : 50;  // default 50 Hz per encoder tick
+        int width;
+
+        if (ctrl_type == DJ_CTRL_ENCODER) {
+            // Encoder: relative inc/dec of tracked width
+            int8_t delta = encoder_delta(old_val, new_val);
+            if (delta == 0) break;
+            // Initialize tracked width from current filter edges on first use
+            if (s_filter_width == 0) {
+                s_filter_width = s_filter_hi - s_filter_lo;
+                if (s_filter_width < wmin) s_filter_width = wmin;
+            }
+            s_filter_width += delta * step;
+            if (s_filter_width < wmin) s_filter_width = wmin;
+            if (s_filter_width > wmax) s_filter_width = wmax;
+            width = s_filter_width;
+        } else {
+            // Knob/slider: scale 0-255 to width range
+            width = wmin + (new_val * (wmax - wmin)) / 255;
+            s_filter_width = width;
+        }
+
         int center = (s_filter_hi + s_filter_lo) / 2;
+        ESP_LOGI(TAG, "FW_DBG [%s] calc: wmin=%d wmax=%d step=%d raw_center=%d width=%d",
+                 cmd->name, wmin, wmax, step, center, width);
         if (center < 0) center = -center;  // abs for LSB
-        int new_lo = center - width / 2;
-        int new_hi = center + width / 2;
-        if (new_lo < 0) new_lo = 0;
-        // ZZSF takes low (4 digits) + high (4 digits)
-        snprintf(buf, sizeof(buf), "ZZSF%04d%04d;", new_lo, new_hi);
+        // ZZSF takes center (4 digits) + width (4 digits) per Thetis CATCommands.cs
+        snprintf(buf, sizeof(buf), "ZZSF%04d%04d;", center, width);
+        ESP_LOGI(TAG, "FW_DBG [%s] result: center=%d width=%d CAT_CMD='%s'",
+                 cmd->name, center, width, buf);
         cat_client_send(buf);
-        s_filter_hi = new_hi;
-        s_filter_lo = new_lo;
+        // Update local tracking to reflect what Thetis will set
+        s_filter_lo = center - width / 2;
+        s_filter_hi = center + width / 2;
+        if (s_filter_lo < 0) s_filter_lo = 0;
         notify_cat(control_name, cmd, buf);
-        ESP_LOGD(TAG, "FILTER_WIDTH [%s] raw=%d -> width=%d lo=%d hi=%d -> %s",
-                 cmd->name, new_val, width, new_lo, new_hi, buf);
         break;
     }
     }
@@ -515,6 +538,12 @@ esp_err_t mapping_engine_save(void)
             cJSON_AddNumberToObject(obj, "p", e->param);
         }
         cJSON_AddItemToArray(arr, obj);
+        // Debug: log filter width entries specifically
+        const thetis_cmd_t *dbcmd = cmd_db_find(e->command_id);
+        if (dbcmd && dbcmd->exec_type == CMD_CAT_FILTER_WIDTH) {
+            ESP_LOGI(TAG, "FW_DBG SAVE: '%s' -> cmd_id=%d (%s) param=%d",
+                     e->control_name, e->command_id, dbcmd->name, (int)e->param);
+        }
     }
 
     char *json = cJSON_PrintUnformatted(arr);
@@ -580,7 +609,8 @@ esp_err_t mapping_engine_load(void)
             uint16_t cmd_id = (uint16_t)id->valuedouble;
 
             // Verify command exists in DB
-            if (!cmd_db_find(cmd_id)) {
+            const thetis_cmd_t *dbcmd = cmd_db_find(cmd_id);
+            if (!dbcmd) {
                 ESP_LOGW(TAG, "Unknown command ID %d for %s, skipping", cmd_id, c->valuestring);
                 continue;
             }
@@ -589,6 +619,11 @@ esp_err_t mapping_engine_load(void)
             strncpy(entry.control_name, c->valuestring, sizeof(entry.control_name) - 1);
             entry.command_id = cmd_id;
             entry.param = (p && cJSON_IsNumber(p)) ? (int32_t)p->valuedouble : 0;
+            // Debug: log filter width entries specifically
+            if (dbcmd->exec_type == CMD_CAT_FILTER_WIDTH) {
+                ESP_LOGI(TAG, "FW_DBG LOAD: '%s' -> cmd_id=%d (%s) param=%d",
+                         entry.control_name, entry.command_id, dbcmd->name, (int)entry.param);
+            }
             mapping_engine_set(&entry);  // Overwrites existing or appends
             user_count++;
         }
@@ -652,9 +687,11 @@ void mapping_engine_on_control(
                 else entry.param = 100;
             }
             mapping_engine_set(&entry);
-            mapping_engine_save();
+            esp_err_t save_ret = mapping_engine_save();
 
-            ESP_LOGI(TAG, "Learned: %s -> [%d] %s", name, cmd->id, cmd->name);
+            ESP_LOGI(TAG, "Learned: %s -> [%d] %s (exec_type=%d, save=%s)",
+                     name, cmd->id, cmd->name, cmd->exec_type,
+                     save_ret == ESP_OK ? "OK" : "FAIL");
 
             if (s_learn_cb) {
                 s_learn_cb(name, cmd->id, cmd->name);
@@ -791,11 +828,15 @@ void mapping_engine_on_cat_response(const char *cmd, const char *value)
     } else if (strcmp(cmd, "ZZFH") == 0) {
         s_filter_hi = atoi(value);
         s_filter_synced = true;
-        ESP_LOGI(TAG, "Sync filter hi = %d Hz", s_filter_hi);
+        s_filter_width = 0;  // reset so next tick re-derives from actual edges
+        ESP_LOGI(TAG, "FW_DBG Sync ZZFH: filter_hi=%d raw='%s' (synced=%d, lo=%d)",
+                 s_filter_hi, value, s_filter_synced, s_filter_lo);
     } else if (strcmp(cmd, "ZZFL") == 0) {
         s_filter_lo = atoi(value);
         s_filter_synced = true;
-        ESP_LOGI(TAG, "Sync filter lo = %d Hz", s_filter_lo);
+        s_filter_width = 0;  // reset so next tick re-derives from actual edges
+        ESP_LOGI(TAG, "FW_DBG Sync ZZFL: filter_lo=%d raw='%s' (synced=%d, hi=%d)",
+                 s_filter_lo, value, s_filter_synced, s_filter_hi);
     }
 
     // Generic toggle sync: if response matches a tracked toggle, update state + LED
