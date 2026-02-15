@@ -161,10 +161,13 @@ static long snap_tune(long freq, int step, int direction)
 {
     if (step == 0) return freq;
     long snapped = (freq / step) * step;
+    int orig_dir = direction;
     // If already on boundary and going down, the integer division handled one step
     if (direction < 0 && freq % step != 0)
         direction++;  // off boundary, division already stepped down
     snapped += (long)direction * step;
+    ESP_LOGD(TAG, "VFO_DBG snap_tune: in=%ld step=%d dir=%d->%d mod=%ld snapped=%ld",
+             freq, step, orig_dir, direction, freq % step, snapped);
     return snapped;
 }
 
@@ -354,26 +357,55 @@ static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
         }
         if (delta == 0) break;
 
+        long *freq = NULL;
+        bool *synced_flag = NULL;
+        const char *vfo_label = "?";
+        if (strcmp(cmd->cat_cmd, "ZZFA") == 0) {
+            freq = &s_vfo_a_freq;
+            synced_flag = &s_vfo_a_synced;
+            vfo_label = "A";
+        } else if (strcmp(cmd->cat_cmd, "ZZFB") == 0) {
+            freq = &s_vfo_b_freq;
+            synced_flag = &s_vfo_b_synced;
+            vfo_label = "B";
+        }
+        if (!freq || !synced_flag) break;
+
+        // Check idle gap BEFORE velocity_multiplier() updates s_last_freq_tick_us
+        int64_t now_us = esp_timer_get_time();
+        int64_t gap = now_us - s_last_freq_tick_us;
+
+        ESP_LOGI(TAG, "VFO_DBG [%s] VFO_%s tick: delta=%d old=%d new=%d synced=%d "
+                 "cached_freq=%ld gap=%lld ms",
+                 cmd->name, vfo_label, delta, old_val, new_val,
+                 *synced_flag, *freq, gap / 1000);
+
+        if (!*synced_flag) {
+            ESP_LOGW(TAG, "VFO_DBG [%s] SKIPPED — VFO_%s not synced yet", cmd->name, vfo_label);
+            break;
+        }
+
+        // Re-sync from Thetis on first tick after idle (>1s gap).
+        // Catches band/freq changes made in Thetis UI. Skip this tick;
+        // response arrives before next tick so subsequent ticks use fresh data.
+        if (gap > 1000000) {  // >1 second since last FREQ tick
+            *synced_flag = false;
+            const char *query = (strcmp(cmd->cat_cmd, "ZZFA") == 0) ? "ZZFA;" : "ZZFB;";
+            cat_client_send(query);
+            ESP_LOGI(TAG, "VFO_DBG [%s] RE-SYNC: gap=%lld ms > 1s, sent %s "
+                     "invalidated VFO_%s (was %ld Hz)",
+                     cmd->name, gap / 1000, query, vfo_label, *freq);
+            // Update timestamp so velocity_multiplier starts fresh after resync
+            s_last_freq_tick_us = now_us;
+            break;
+        }
+
         // Step: use Thetis step (from ZZAC), scaled by tick-rate velocity
         int base_step = s_tune_step_hz;
         int mult = velocity_multiplier();
         int step_hz = base_step * mult;
 
-        long *freq = NULL;
-        bool synced = false;
-        if (strcmp(cmd->cat_cmd, "ZZFA") == 0) {
-            freq = &s_vfo_a_freq;
-            synced = s_vfo_a_synced;
-        } else if (strcmp(cmd->cat_cmd, "ZZFB") == 0) {
-            freq = &s_vfo_b_freq;
-            synced = s_vfo_b_synced;
-        }
-        if (!freq) break;
-        if (!synced) {
-            ESP_LOGW(TAG, "FREQ [%s] skipped — VFO not synced from Thetis yet", cmd->name);
-            break;
-        }
-
+        long old_freq = *freq;
         int direction = (delta > 0) ? 1 : -1;
         *freq = snap_tune(*freq, step_hz, direction);
         if (*freq < 100000) *freq = 100000;
@@ -381,8 +413,8 @@ static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
         snprintf(buf, sizeof(buf), "%s%011ld;", cmd->cat_cmd, *freq);
         cat_client_send(buf);
         notify_cat(control_name, cmd, buf);
-        ESP_LOGD(TAG, "FREQ [%s] delta=%d step=%d (x%d) -> %ld Hz",
-                 cmd->name, delta, step_hz, mult, *freq);
+        ESP_LOGI(TAG, "VFO_DBG [%s] TUNE: %ld -> %ld Hz (dir=%d step=%d x%d=%d) cmd='%s'",
+                 cmd->name, old_freq, *freq, direction, base_step, mult, step_hz, buf);
         break;
     }
 
@@ -807,17 +839,19 @@ void mapping_engine_on_cat_response(const char *cmd, const char *value)
 
     if (strcmp(cmd, "ZZFA") == 0) {
         long f = atol(value);
+        ESP_LOGI(TAG, "VFO_DBG RESPONSE ZZFA: raw='%s' parsed=%ld (prev=%ld synced=%d)",
+                 value, f, s_vfo_a_freq, s_vfo_a_synced);
         if (f > 0) {
             s_vfo_a_freq = f;
             s_vfo_a_synced = true;
-            ESP_LOGI(TAG, "Sync VFO A = %ld Hz", f);
         }
     } else if (strcmp(cmd, "ZZFB") == 0) {
         long f = atol(value);
+        ESP_LOGI(TAG, "VFO_DBG RESPONSE ZZFB: raw='%s' parsed=%ld (prev=%ld synced=%d)",
+                 value, f, s_vfo_b_freq, s_vfo_b_synced);
         if (f > 0) {
             s_vfo_b_freq = f;
             s_vfo_b_synced = true;
-            ESP_LOGI(TAG, "Sync VFO B = %ld Hz", f);
         }
     } else if (strcmp(cmd, "ZZAC") == 0) {
         int idx = atoi(value);
