@@ -1,28 +1,26 @@
 # ESP32 DJ Console
 
-ESP32-S3 firmware that bridges a **Hercules DJ Console MP3 e2** to a **Thetis SDR** via TCI (WebSocket) or CAT (TCP) commands. A built-in web GUI allows live monitoring and configuration.
+ESP32-S3 firmware that bridges a **Hercules DJ Console MP3 e2** to a **Thetis SDR** via Kenwood CAT (TCP) commands. A built-in web GUI allows live monitoring and configuration.
 
 ## What it does
 
 ```
 [Hercules DJ Console MP3 e2]
-        |  USB bulk (38-byte state packets)
+        |  USB bulk IN  (38-byte state packets)
+        |  USB bulk OUT (3-byte MIDI LED control)
         v
    [ESP32-S3]
         |
-        +-- TCI WebSocket --> Thetis SDR (ws://host:50001)
-        |   Knobs/buttons map to VFO, mode, volume, PTT, etc.
-        |
         +-- CAT TCP ------> Thetis SDR (tcp://host:31001)
-        |   Fallback protocol (Kenwood ZZ extended commands)
+        |   Kenwood ZZ extended commands (328 commands)
         |
         +-- HTTP :80
-            +-- Svelte SPA (dashboard, mapping editor, debug console)
+            +-- Svelte SPA (dashboard, mappings, LEDs, config, debug)
             +-- REST API for configuration
             +-- WebSocket for live control/radio state updates
 ```
 
-Every knob, slider, button, and jog wheel on the DJ console maps to a radio command. Mappings are fully configurable via the web interface and stored in flash (NVS).
+Every knob, slider, button, and jog wheel on the DJ console maps to a radio command. Mappings are fully configurable via the web interface and stored in flash. LED feedback reflects toggle state and button presses.
 
 ## Hardware
 
@@ -86,10 +84,11 @@ npm run dev
 
 After flashing, access at `http://djconsole.local` (or the device IP).
 
-- **Dashboard** - Connection status (USB, TCI, CAT), radio state (VFO, mode, TX), heap usage
-- **Mappings** - View and edit all 59 control mappings, save to flash
-- **Config** - WiFi credentials, TCI/CAT host and port, protocol selection, debug level
-- **Debug** - Live feed of DJ console control events (useful for verifying mappings)
+- **Dashboard** - Connection status (USB, CAT), radio state (VFO, mode, TX), heap usage
+- **Mappings** - Browse 328 Thetis commands with MIDI-learn, save to flash
+- **LEDs** - Visual LED grid, click to toggle/blink, test sweep, all-off
+- **Config** - WiFi credentials, CAT host and port, debug level
+- **Debug** - Live feed of DJ console control events and CAT traffic
 
 ## REST API
 
@@ -98,30 +97,37 @@ After flashing, access at `http://djconsole.local` (or the device IP).
 | GET | `/api/status` | System status, radio state, heap info |
 | GET | `/api/config` | Current configuration |
 | PUT | `/api/config` | Update configuration (JSON body) |
+| GET | `/api/commands` | Full command database (328 entries with descriptions) |
 | GET | `/api/mappings` | Current mapping table |
 | PUT | `/api/mappings` | Replace mapping table (JSON array) |
 | POST | `/api/mappings/reset` | Reset to default mappings |
+| GET | `/api/leds` | Current LED states |
+| POST | `/api/leds` | Set LED (note, velocity) |
+| POST | `/api/leds/all-off` | Turn off all LEDs |
+| POST | `/api/leds/test` | LED test sweep |
 
-WebSocket at `/ws` pushes live JSON messages for control changes, radio state, and connection status.
+WebSocket at `/ws` pushes live JSON messages for control changes, radio state, LED updates, and connection status.
 
 ## Project Structure
 
 ```
 main/
   main.c              Entry point, task orchestration
-  usb_dj_host.c/h     USB host driver (14-step vendor init, state parsing)
-  tci_client.c/h       TCI WebSocket client (raw TCP + RFC 6455)
+  usb_dj_host.c/h     USB host driver (14-step vendor init, bulk IN/OUT)
   cat_client.c/h       Kenwood CAT TCP client (ZZ extended commands)
-  mapping_engine.c/h   Control-to-command mapping with NVS persistence
+  mapping_engine.c/h   Control-to-command mapping with 328-command database
+  dj_led.c/h           LED driver (MIDI note protocol, set/blink/all-off)
   config_store.c/h     NVS key-value configuration
-  http_server.c/h      HTTP server, REST API, WebSocket, SPIFFS file serving
-  wifi_manager.c/h     WiFi STA with AP fallback
+  http_server.c/h      HTTP server, REST API, WebSocket, LittleFS file serving
+  wifi_manager.c/h     WiFi STA with AP fallback and captive portal
   status_led.c/h       WS2812 RGB status LED
-  usb_debug.c/h        USB packet debugging and hex dump
+  cmd_db_generated.inc Auto-generated command DB (from CATCommands.cs)
 frontend/
   src/App.svelte       Tab-based SPA shell
-  src/pages/           Dashboard, Mappings, Config, Debug pages
+  src/pages/           Dashboard, Mappings, LEDs, Config, Debug pages
   src/lib/             API client, WebSocket, Svelte stores
+scripts/
+  extract_cat_commands.py  Generator for cmd_db_generated.inc
 ```
 
 ## Default Mappings

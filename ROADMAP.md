@@ -1,11 +1,23 @@
 # ESP32 DJ Console - Roadmap
 
 ## Current Focus
-**LED control system testing and hardware validation**
-- LED sweep test works, debugging single LED toggle via web UI
-- Started: 2026-02-15
+
+_No current goal. Next planned item will be promoted on next planning session._
 
 ## Completed
+- [x] Fix command names, exec_type detection, and add description tooltips (2026-02-15) `a2c6a9f`
+- [x] OTA firmware update support (2026-02-15)
+- [x] WiFi AP mode captive portal improvements (2026-02-15)
+- [x] Bump CPU to 240MHz and enable performance optimizations (2026-02-15) `2b4b155`
+- [x] Auto-generate CAT command DB from CATCommands.cs and add toggle state sync (2026-02-15) `ab70e8b`
+- [x] CAT response-driven LED state (2026-02-15)
+- [x] Add LED flash-on-press for non-toggle button commands (2026-02-15)
+- [x] Clean up tmp/ reference files (2026-02-15)
+- [x] Delete orphaned tci_client.c/h files (2026-02-15)
+- [x] Add learn_timeout WebSocket notification to frontend (2026-02-15)
+- [x] Verify CAT commands against Thetis documentation (2026-02-15)
+- [x] LED control system testing and hardware validation (2026-02-15)
+- [x] Add project roadmap (2026-02-15) `8eb1c61`
 - [x] Add LED send logging and fix blink/on state transitions (2026-02-15) `016e6a5`
 - [x] USB host driver for Hercules DJ Console MP3 e2 (2026-02-13)
 - [x] Kenwood CAT TCP client for Thetis (2026-02-13)
@@ -22,14 +34,6 @@
 - [ ] Test mapping engine toggle -> LED feedback on hardware
 
 ## Planned
-- [ ] Verify CAT commands against Thetis documentation (especially ZZBS band select)
-- [ ] Add learn_timeout WebSocket notification to frontend
-- [ ] Delete orphaned tci_client.c/h files
-- [ ] Clean up tmp/ reference files
-- [ ] Add LED flash-on-press for non-toggle button commands
-- [ ] CAT response-driven LED state (e.g., TX state from Thetis updates LED)
-- [ ] WiFi AP mode captive portal improvements
-- [ ] OTA firmware update support
 
 ## Recent Planning Sessions
 _Planning sessions will be recorded here automatically._
