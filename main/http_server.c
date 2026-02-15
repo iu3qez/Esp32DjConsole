@@ -1,4 +1,5 @@
 #include <string.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
@@ -127,8 +128,9 @@ static const char *exec_type_str(cmd_exec_type_t t)
     case CMD_CAT_TOGGLE: return "TOG";
     case CMD_CAT_SET:    return "SET";
     case CMD_CAT_FREQ:   return "FRQ";
-    case CMD_CAT_WHEEL:  return "WHL";
-    default:             return "?";
+    case CMD_CAT_WHEEL:        return "WHL";
+    case CMD_CAT_FILTER_WIDTH: return "FLW";
+    default:                   return "?";
     }
 }
 
@@ -916,6 +918,7 @@ static esp_err_t static_file_handler_internal(httpd_req_t *req)
 static void on_sock_close(httpd_handle_t hd, int sockfd)
 {
     ws_remove_client(sockfd);
+    close(sockfd);  // MUST close — custom close_fn replaces default close behavior
 }
 
 // ----- SPIFFS mount -----

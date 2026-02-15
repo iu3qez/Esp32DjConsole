@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { getCommands, getMappings, resetMappings, downloadMappings, uploadMappings, clearMapping } from '../lib/api.js';
-  import { subscribe as wsSub } from '../lib/ws.js';
+  import { subscribe as wsSub, send as wsSend } from '../lib/ws.js';
   import { success, error } from '../lib/toast.js';
   import ConfirmDialog from '../lib/ConfirmDialog.svelte';
 
@@ -11,6 +11,7 @@
   let mappings = $state([]);
   let search = $state('');
   let catFilter = $state('');
+  let execFilter = $state('');
   let showResetConfirm = $state(false);
   let learning = $state(false);
   let learnCmd = $state(null);
@@ -27,6 +28,9 @@
     }
     if (catFilter) {
       cmds = cmds.filter(c => c.cat_name === catFilter);
+    }
+    if (execFilter !== '') {
+      cmds = cmds.filter(c => c.exec === Number(execFilter));
     }
     const groups = {};
     for (const c of cmds) {
@@ -63,12 +67,7 @@
     learnCmd = cmd;
     learning = true;
     learnTimer = 15;
-    // Send learn command via WebSocket
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'learn', command_id: cmd.id }));
-      ws.close();
-    };
+    wsSend({ type: 'learn', command_id: cmd.id });
     // Countdown
     learnInterval = setInterval(() => {
       learnTimer--;
@@ -81,11 +80,7 @@
   function cancelLearn() {
     if (learnInterval) { clearInterval(learnInterval); learnInterval = null; }
     if (learning) {
-      const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'learn_cancel' }));
-        ws.close();
-      };
+      wsSend({ type: 'learn_cancel' });
     }
     learning = false;
     learnCmd = null;
@@ -185,6 +180,12 @@
       <option value="">All Categories</option>
       {#each categories() as cat}
         <option value={cat}>{cat}</option>
+      {/each}
+    </select>
+    <select bind:value={execFilter}>
+      <option value="">All Types</option>
+      {#each EXEC_LABELS as label, i}
+        <option value={i}>{label}</option>
       {/each}
     </select>
   </div>

@@ -49,6 +49,12 @@ export function subscribe(fn) {
   return () => { listeners = listeners.filter(l => l !== fn); };
 }
 
+export function send(obj) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(obj));
+  }
+}
+
 export function disconnect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (socket) { socket.close(); socket = null; }

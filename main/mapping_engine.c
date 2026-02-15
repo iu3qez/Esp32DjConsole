@@ -77,9 +77,9 @@ static bool s_vfo_a_synced = false;
 static bool s_vfo_b_synced = false;
 
 // Filter edge tracking for FILTER_WIDTH exec type (synced from Thetis ZZFH/ZZFL)
-static int s_filter_hi = 1000;   // default upper
-static int s_filter_lo = 25;     // default lower
-static bool s_filter_synced = false;
+static int s_filter_hi = 1000;   // default upper (updated from ZZFH)
+static int s_filter_lo = 25;     // default lower (updated from ZZFL)
+static bool s_filter_synced = true;  // usable with defaults, refined once ZZFH/ZZFL sync
 
 // Tuning step from Thetis ZZAC response (index 0-25 -> Hz)
 static const int s_step_table[] = {
