@@ -68,6 +68,10 @@ export function ledsTest() {
   return request('POST', '/api/leds/test');
 }
 
+export function sendCat(cmd) {
+  return request('POST', '/api/cat/send', { cmd });
+}
+
 export async function uploadMappings(jsonText) {
   const res = await fetch('/api/mappings/upload', {
     method: 'POST',

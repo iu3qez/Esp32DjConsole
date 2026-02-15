@@ -79,7 +79,7 @@ static bool s_vfo_b_synced = false;
 // Filter edge tracking for FILTER_WIDTH exec type (synced from Thetis ZZFH/ZZFL)
 static int s_filter_hi = 1000;   // default upper (updated from ZZFH)
 static int s_filter_lo = 25;     // default lower (updated from ZZFL)
-static bool s_filter_synced = true;  // usable with defaults, refined once ZZFH/ZZFL sync
+static bool s_filter_synced = false;  // must sync from Thetis before first use
 
 // Tuning step from Thetis ZZAC response (index 0-25 -> Hz)
 static const int s_step_table[] = {
@@ -90,6 +90,29 @@ static const int s_step_table[] = {
 };
 #define STEP_TABLE_SIZE (sizeof(s_step_table) / sizeof(s_step_table[0]))
 static int s_tune_step_hz = 10;  // default 10 Hz, updated from ZZAC if supported
+
+// SET value tracker — for encoder-as-relative on CMD_CAT_SET commands
+#define SET_SLOTS 16
+static struct {
+    uint16_t cmd_id;
+    int32_t  value;
+    bool     inited;
+} s_set_state[SET_SLOTS];
+static int s_set_count = 0;
+
+static int32_t *find_set_value(uint16_t cmd_id, int value_min, int value_max)
+{
+    for (int i = 0; i < s_set_count; i++) {
+        if (s_set_state[i].cmd_id == cmd_id) return &s_set_state[i].value;
+    }
+    if (s_set_count < SET_SLOTS) {
+        s_set_state[s_set_count].cmd_id = cmd_id;
+        s_set_state[s_set_count].value = (value_min + value_max) / 2;  // start at midpoint
+        s_set_state[s_set_count].inited = true;
+        return &s_set_state[s_set_count++].value;
+    }
+    return NULL;
+}
 
 // Velocity scaling: time between encoder ticks determines step multiplier
 #define VELOCITY_MAX_MULTIPLIER 10
@@ -291,9 +314,23 @@ static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
     }
 
     case CMD_CAT_SET: {
-        // Scale 0-255 to value_min..value_max
-        int range = cmd->value_max - cmd->value_min;
-        int val = cmd->value_min + (new_val * range) / 255;
+        int val;
+        if (ctrl_type == DJ_CTRL_ENCODER) {
+            // Encoder: relative inc/dec, step = param (default 1)
+            int8_t delta = encoder_delta(old_val, new_val);
+            if (delta == 0) break;
+            int step = (param > 0) ? param : 1;
+            int32_t *tracked = find_set_value(cmd->id, cmd->value_min, cmd->value_max);
+            if (!tracked) break;
+            *tracked += delta * step;
+            if (*tracked > cmd->value_max) *tracked = cmd->value_max;
+            if (*tracked < cmd->value_min) *tracked = cmd->value_min;
+            val = *tracked;
+        } else {
+            // Knob/slider: scale 0-255 to value_min..value_max
+            int range = cmd->value_max - cmd->value_min;
+            val = cmd->value_min + (new_val * range) / 255;
+        }
         snprintf(buf, sizeof(buf), "%s%0*d;", cmd->cat_cmd,
                  cmd->value_digits, val);
         cat_client_send(buf);
@@ -373,24 +410,29 @@ static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
     case CMD_CAT_FILTER_WIDTH: {
         // Scale 0-255 knob to width range (value_min..value_max, default 50-6000 Hz)
         if (!s_filter_synced) {
-            ESP_LOGW(TAG, "FILTER_WIDTH [%s] skipped — filter not synced from Thetis yet", cmd->name);
+            // First touch: query Thetis for actual filter edges, skip this tick
+            cat_client_send("ZZFH;");
+            cat_client_send("ZZFL;");
+            ESP_LOGW(TAG, "FILTER_WIDTH [%s] querying ZZFH/ZZFL — skipping first tick", cmd->name);
             break;
         }
         int wmin = cmd->value_min > 0 ? cmd->value_min : 50;
         int wmax = cmd->value_max > 0 ? cmd->value_max : 6000;
         int width = wmin + (new_val * (wmax - wmin)) / 255;
-        // Compute center from current filter edges
+        // Compute center from current filter edges, derive new lo/hi
         int center = (s_filter_hi + s_filter_lo) / 2;
         if (center < 0) center = -center;  // abs for LSB
-        // Send ZZSF with center (4 digits) + width (4 digits)
-        snprintf(buf, sizeof(buf), "ZZSF%04d%04d;", center, width);
+        int new_lo = center - width / 2;
+        int new_hi = center + width / 2;
+        if (new_lo < 0) new_lo = 0;
+        // ZZSF takes low (4 digits) + high (4 digits)
+        snprintf(buf, sizeof(buf), "ZZSF%04d%04d;", new_lo, new_hi);
         cat_client_send(buf);
-        // Update tracked hi/lo to match what we just sent
-        s_filter_hi = center + width / 2;
-        s_filter_lo = center - width / 2;
+        s_filter_hi = new_hi;
+        s_filter_lo = new_lo;
         notify_cat(control_name, cmd, buf);
-        ESP_LOGD(TAG, "FILTER_WIDTH [%s] raw=%d -> width=%d center=%d -> %s",
-                 cmd->name, new_val, width, center, buf);
+        ESP_LOGD(TAG, "FILTER_WIDTH [%s] raw=%d -> width=%d lo=%d hi=%d -> %s",
+                 cmd->name, new_val, width, new_lo, new_hi, buf);
         break;
     }
     }
@@ -765,6 +807,16 @@ void mapping_engine_on_cat_response(const char *cmd, const char *value)
                 update_toggle_led(s_toggles[i].id, new_state);
                 ESP_LOGI(TAG, "Sync toggle %s = %d", cmd, new_state);
             }
+            break;
+        }
+    }
+
+    // Generic SET value sync: update tracked encoder-set values from Thetis responses
+    for (int i = 0; i < s_set_count; i++) {
+        const thetis_cmd_t *sc = cmd_db_find(s_set_state[i].cmd_id);
+        if (sc && strcmp(cmd, sc->cat_cmd) == 0) {
+            s_set_state[i].value = atoi(value);
+            ESP_LOGI(TAG, "Sync SET %s = %d", cmd, s_set_state[i].value);
             break;
         }
     }

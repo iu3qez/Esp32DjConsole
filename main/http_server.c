@@ -793,6 +793,47 @@ static esp_err_t api_leds_test_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ----- REST API: POST /api/cat/send -----
+
+static esp_err_t api_cat_send_handler(httpd_req_t *req)
+{
+    char body[128];
+    int len = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (len <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+    body[len] = '\0';
+
+    cJSON *j = cJSON_Parse(body);
+    if (!j) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    const char *cmd = cJSON_GetStringValue(cJSON_GetObjectItem(j, "cmd"));
+    if (!cmd || cmd[0] == '\0') {
+        cJSON_Delete(j);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing cmd");
+        return ESP_FAIL;
+    }
+
+    esp_err_t ret = cat_client_send(cmd);
+    ESP_LOGI(TAG, "Manual CAT send: %s (ret=%d)", cmd, ret);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "ok", ret == ESP_OK);
+    cJSON_AddStringToObject(resp, "sent", cmd);
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    cJSON_Delete(j);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
+
 // ----- Static file serving from SPIFFS -----
 
 static const char *get_mime_type(const char *path)
@@ -998,6 +1039,7 @@ esp_err_t http_server_init(void)
         { .uri = "/api/leds",              .method = HTTP_POST, .handler = api_leds_post_handler },
         { .uri = "/api/leds/all-off",      .method = HTTP_POST, .handler = api_leds_alloff_handler },
         { .uri = "/api/leds/test",         .method = HTTP_POST, .handler = api_leds_test_handler },
+        { .uri = "/api/cat/send",          .method = HTTP_POST, .handler = api_cat_send_handler },
     };
     for (int i = 0; i < sizeof(api_uris) / sizeof(api_uris[0]); i++) {
         httpd_register_uri_handler(s_server, &api_uris[i]);

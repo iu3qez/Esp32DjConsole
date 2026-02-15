@@ -1,10 +1,14 @@
 <script>
   import { controlLog, catLog } from '../lib/stores.js';
+  import { sendCat } from '../lib/api.js';
+  import { success, error } from '../lib/toast.js';
 
   let mode = $state('usb');  // 'usb' or 'cat'
   let usbLog = $state([]);
   let catEntries = $state([]);
   let paused = $state(false);
+  let catCmd = $state('');
+  let sending = $state(false);
 
   $effect(() => {
     return controlLog.subscribe(v => { if (!paused) usbLog = v; });
@@ -31,6 +35,22 @@
   function activeLog() {
     return mode === 'usb' ? usbLog : catEntries;
   }
+
+  async function doSendCat() {
+    let cmd = catCmd.trim();
+    if (!cmd) return;
+    if (!cmd.endsWith(';')) cmd += ';';
+    sending = true;
+    try {
+      await sendCat(cmd);
+      success(`Sent: ${cmd}`);
+    } catch (e) { error('Send failed: ' + e.message); }
+    sending = false;
+  }
+
+  function onCatKeydown(e) {
+    if (e.key === 'Enter') doSendCat();
+  }
 </script>
 
 <div class="toolbar">
@@ -41,6 +61,13 @@
   <span class="count">{activeLog().length} events</span>
   <button class:active={paused} onclick={() => paused = !paused}>{paused ? 'Resume' : 'Pause'}</button>
   <button class="clear" onclick={clear}>Clear</button>
+</div>
+
+<div class="cat-console">
+  <span class="cat-label">CAT</span>
+  <input type="text" bind:value={catCmd} onkeydown={onCatKeydown}
+         placeholder="e.g. ZZZB; or ZZFA;" disabled={sending} />
+  <button onclick={doSendCat} disabled={sending || !catCmd.trim()}>Send</button>
 </div>
 
 <div class="log">
@@ -152,4 +179,27 @@
   .cmd { color: #90be6d; min-width: 10em; }
   .cat-str { color: #7a9ab8; font-weight: 600; }
   .empty { color: #7a8aa8; padding: 2.5rem; text-align: center; }
+
+  .cat-console {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: #16213e; border: 1px solid #1a3a6a; border-radius: 8px;
+  }
+  .cat-label {
+    font-size: 0.75rem; font-weight: 700; color: #e94560;
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .cat-console input {
+    flex: 1; padding: 0.4rem 0.6rem; background: #0f0f1a; border: 1px solid #1a3a6a;
+    color: #e0e0e0; border-radius: 6px; font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.9rem;
+  }
+  .cat-console input:focus { border-color: #e94560; outline: none; }
+  .cat-console button {
+    padding: 0.4rem 1rem; border: none; border-radius: 6px;
+    background: #1a4a8a; color: #e0e0e0; cursor: pointer; font-size: 0.85rem;
+    font-weight: 500; transition: background 0.2s;
+  }
+  .cat-console button:hover:not(:disabled) { background: #2a5aaa; color: #fff; }
+  .cat-console button:disabled { opacity: 0.4; cursor: default; }
 </style>
