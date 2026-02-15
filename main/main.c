@@ -65,11 +65,12 @@ static void cat_state_cb(cat_state_t new_state)
     }
 }
 
-// CAT response callback — forward to mapping engine for VFO/step sync
+// CAT response callback — forward to mapping engine for VFO/step sync + WS notify
 static void cat_response_cb(const char *cmd, const char *value)
 {
     ESP_LOGD(TAG, "CAT response: %s = %s", cmd, value);
     mapping_engine_on_cat_response(cmd, value);
+    http_server_notify_cat_rx(cmd, value);
 }
 
 // Start CAT client from NVS config

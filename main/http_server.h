@@ -50,3 +50,5 @@ void http_server_notify_control(
     uint8_t new_value);
 
 void http_server_notify_status(void);
+
+void http_server_notify_cat_rx(const char *cmd, const char *value);

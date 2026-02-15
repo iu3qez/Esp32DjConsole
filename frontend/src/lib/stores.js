@@ -17,10 +17,21 @@ export const controlLog = writable([]);
 // Live CAT dispatch events (ring buffer of last 100)
 export const catLog = writable([]);
 
+// CAT ticker: merged TX+RX stream (ring buffer of last 20 for ticker display)
+export const catTicker = writable([]);
+
 // LED states: Map of note -> "on"|"off"|"blink"
 export const ledStates = writable({});
 
 const MAX_LOG = 100;
+const MAX_TICKER = 20;
+
+function pushTicker(entry) {
+  catTicker.update(log => {
+    const next = [entry, ...log];
+    return next.length > MAX_TICKER ? next.slice(0, MAX_TICKER) : next;
+  });
+}
 
 function handleWsMessage(msg) {
   switch (msg.type) {
@@ -43,6 +54,12 @@ function handleWsMessage(msg) {
         const next = [entry, ...log];
         return next.length > MAX_LOG ? next.slice(0, MAX_LOG) : next;
       });
+      // Also push to ticker as TX
+      pushTicker({ dir: 'TX', cat: msg.cat, ts: Date.now() });
+      break;
+    case 'cat_rx':
+      // CAT response from Thetis
+      pushTicker({ dir: 'RX', cat: `${msg.cmd}${msg.value}`, ts: Date.now() });
       break;
     case 'led':
       ledStates.update(s => ({ ...s, [msg.note]: msg.state }));

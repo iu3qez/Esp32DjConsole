@@ -3,6 +3,7 @@
   import { initStores, wsConnected } from './lib/stores.js';
   import { toasts, dismissToast } from './lib/toast.js';
   import Toast from './lib/Toast.svelte';
+  import CatTicker from './lib/CatTicker.svelte';
   import Dashboard from './pages/Dashboard.svelte';
   import Mappings from './pages/Mappings.svelte';
   import Config from './pages/Config.svelte';
@@ -31,6 +32,8 @@
   <h1>DJ Console</h1>
   <span class="ws-badge" class:ok={connected}>{connected ? 'Live' : 'Offline'}</span>
 </header>
+
+<CatTicker />
 
 <nav>
   {#each tabs as tab}

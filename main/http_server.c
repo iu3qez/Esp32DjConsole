@@ -108,6 +108,17 @@ void http_server_notify_status(void)
     http_server_ws_broadcast(buf);
 }
 
+void http_server_notify_cat_rx(const char *cmd, const char *value)
+{
+    if (s_ws_count == 0) return;
+
+    char buf[192];
+    snprintf(buf, sizeof(buf),
+        "{\"type\":\"cat_rx\",\"cmd\":\"%s\",\"value\":\"%s\"}",
+        cmd, value ? value : "");
+    http_server_ws_broadcast(buf);
+}
+
 // ----- Learn mode callback (fires when a control is learned) -----
 
 static void on_learn_complete(const char *control_name, uint16_t command_id, const char *command_name)
