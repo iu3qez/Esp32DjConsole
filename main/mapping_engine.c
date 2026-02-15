@@ -416,16 +416,16 @@ void mapping_engine_reset_defaults(void)
     memset(s_mappings, 0, sizeof(s_mappings));
 
     // -- Deck A --  (CMD_CAT_FREQ: param = Hz per encoder tick)
-    add_default("Jog_A",    100, 10);      // VFO A Tune, 10 Hz/tick
-    add_default("Pitch_A",  100, 100);     // VFO A Tune, 100 Hz/tick
-    add_default("Vol_A",    500, 0);       // AF Gain
-    add_default("Treble_A", 600, 0);       // Filter High
-    add_default("Medium_A", 601, 0);       // Filter Low
-    add_default("Play_A",   400, 0);       // MOX toggle
-    add_default("CUE_A",    400, 0);       // MOX toggle
-    add_default("Listen_A", 502, 0);       // Mute toggle
-    add_default("Sync_A",   401, 0);       // Tune toggle
-    add_default("Load_A",   300, 0);       // Mode Next
+    add_default("Jog_A",    100, 10);      // VFO A Tune (ZZFA), 10 Hz/tick
+    add_default("Pitch_A",  100, 100);     // VFO A Tune (ZZFA), 100 Hz/tick
+    add_default("Vol_A",    501, 0);       // AF Gain (ZZAG)
+    add_default("Treble_A", 613, 0);       // Filter High (ZZFH)
+    add_default("Medium_A", 612, 0);       // Filter Low (ZZFL)
+    add_default("Play_A",   434, 0);       // MOX toggle (ZZTX)
+    add_default("CUE_A",    434, 0);       // MOX toggle (ZZTX)
+    add_default("Listen_A", 507, 0);       // Mute toggle (ZZMA)
+    add_default("Sync_A",  1209, 0);       // TUN toggle (ZZTU)
+    add_default("Load_A",   219, 0);       // Band Up (ZZBU)
 
     // N1-N8 -> Bands
     add_default("N1_A",     202, 0);       // 160m
@@ -438,19 +438,19 @@ void mapping_engine_reset_defaults(void)
     add_default("N8_A",     211, 0);       // 10m
 
     // Crossfader -> Drive
-    add_default("XFader",   505, 0);       // Drive Level
+    add_default("XFader",   421, 0);       // Drive Level (ZZPC)
 
     // -- Deck B --
-    add_default("Jog_B",    101, 10);      // VFO B Tune, 10 Hz step
-    add_default("Pitch_B",  101, 100);     // VFO B Tune, 100 Hz step
-    add_default("Vol_B",    500, 0);       // AF Gain
-    add_default("Play_B",   900, 0);       // Split toggle
+    add_default("Jog_B",    101, 10);      // VFO B Tune (ZZFB), 10 Hz step
+    add_default("Pitch_B",  101, 100);     // VFO B Tune (ZZFB), 100 Hz step
+    add_default("Vol_B",    501, 0);       // AF Gain (ZZAG)
+    add_default("Play_B",   911, 0);       // Split toggle (ZZSP)
 
-    // FWD/RWD -> VFO jump buttons
-    add_default("FWD_A",    105, 0);       // VFO A Up 100kHz
-    add_default("RWD_A",    106, 0);       // VFO A Down 100kHz
-    add_default("FWD_B",    107, 0);       // VFO B Up 100kHz
-    add_default("RWD_B",    108, 0);       // VFO B Down 100kHz
+    // FWD/RWD
+    add_default("FWD_A",    424, 0);       // VFO A Step Up (ZZSB)
+    add_default("RWD_A",    423, 0);       // VFO A Step Down (ZZSA)
+    add_default("FWD_B",    219, 0);       // Band Up (ZZBU)
+    add_default("RWD_B",    216, 0);       // Band Down (ZZBD)
 
     ESP_LOGI(TAG, "Default mappings loaded (%d entries)", s_mapping_count);
 }
@@ -504,7 +504,7 @@ esp_err_t mapping_engine_load(void)
 {
     struct stat st;
     if (stat(MAPPINGS_PATH, &st) != 0) {
-        ESP_LOGI(TAG, "No mappings file at %s", MAPPINGS_PATH);
+        ESP_LOGI(TAG, "No user mappings file at %s", MAPPINGS_PATH);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -526,34 +526,34 @@ esp_err_t mapping_engine_load(void)
         return ESP_ERR_INVALID_ARG;
     }
 
-    s_mapping_count = 0;
-    memset(s_mappings, 0, sizeof(s_mappings));
-
+    // Overlay user mappings on top of defaults (don't clear — defaults already loaded)
+    int user_count = 0;
     cJSON *item;
     cJSON_ArrayForEach(item, arr) {
-        if (s_mapping_count >= MAX_MAPPINGS) break;
-
-        mapping_entry_t *e = &s_mappings[s_mapping_count];
         cJSON *c = cJSON_GetObjectItem(item, "c");
         cJSON *id = cJSON_GetObjectItem(item, "id");
         cJSON *p = cJSON_GetObjectItem(item, "p");
 
         if (c && cJSON_IsString(c) && id && cJSON_IsNumber(id)) {
-            strncpy(e->control_name, c->valuestring, sizeof(e->control_name) - 1);
-            e->command_id = (uint16_t)id->valuedouble;
-            e->param = (p && cJSON_IsNumber(p)) ? (int32_t)p->valuedouble : 0;
+            uint16_t cmd_id = (uint16_t)id->valuedouble;
 
             // Verify command exists in DB
-            if (cmd_db_find(e->command_id)) {
-                s_mapping_count++;
-            } else {
-                ESP_LOGW(TAG, "Unknown command ID %d for %s, skipping", e->command_id, e->control_name);
+            if (!cmd_db_find(cmd_id)) {
+                ESP_LOGW(TAG, "Unknown command ID %d for %s, skipping", cmd_id, c->valuestring);
+                continue;
             }
+
+            mapping_entry_t entry = {0};
+            strncpy(entry.control_name, c->valuestring, sizeof(entry.control_name) - 1);
+            entry.command_id = cmd_id;
+            entry.param = (p && cJSON_IsNumber(p)) ? (int32_t)p->valuedouble : 0;
+            mapping_engine_set(&entry);  // Overwrites existing or appends
+            user_count++;
         }
     }
 
     cJSON_Delete(arr);
-    ESP_LOGI(TAG, "Loaded %d mappings from %s", s_mapping_count, MAPPINGS_PATH);
+    ESP_LOGI(TAG, "Overlaid %d user mappings from %s (total %d)", user_count, MAPPINGS_PATH, s_mapping_count);
     return ESP_OK;
 }
 
@@ -563,10 +563,9 @@ esp_err_t mapping_engine_load(void)
 
 esp_err_t mapping_engine_init(void)
 {
-    if (mapping_engine_load() != ESP_OK) {
-        mapping_engine_reset_defaults();
-        mapping_engine_save();  // Write defaults to SPIFFS
-    }
+    // Always start from defaults, then overlay user mappings on top
+    mapping_engine_reset_defaults();
+    mapping_engine_load();  // Overlays user customizations (no-op if no file)
 
     ESP_LOGI(TAG, "Mapping engine initialized (%d mappings, %d commands in DB)",
              s_mapping_count, (int)CMD_DB_COUNT);
