@@ -386,7 +386,10 @@ static esp_err_t api_commands_get_handler(httpd_req_t *req)
     int count = 0;
     const thetis_cmd_t *db = cmd_db_get_all(&count);
 
-    cJSON *arr = cJSON_CreateArray();
+    httpd_resp_set_type(req, "application/json");
+
+    // Send as chunks to avoid truncation with large payloads (~50KB)
+    httpd_resp_sendstr_chunk(req, "[");
     for (int i = 0; i < count; i++) {
         cJSON *obj = cJSON_CreateObject();
         cJSON_AddNumberToObject(obj, "id", db[i].id);
@@ -396,15 +399,17 @@ static esp_err_t api_commands_get_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(obj, "exec", db[i].exec_type);
         if (db[i].description)
             cJSON_AddStringToObject(obj, "desc", db[i].description);
-        cJSON_AddItemToArray(arr, obj);
+
+        char *item = cJSON_PrintUnformatted(obj);
+        cJSON_Delete(obj);
+
+        if (i > 0)
+            httpd_resp_sendstr_chunk(req, ",");
+        httpd_resp_sendstr_chunk(req, item);
+        free(item);
     }
-
-    char *json = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json);
-    free(json);
+    httpd_resp_sendstr_chunk(req, "]");
+    httpd_resp_sendstr_chunk(req, NULL);  // End chunked response
     return ESP_OK;
 }
 
@@ -957,7 +962,7 @@ esp_err_t http_server_init(void)
     config.max_uri_handlers = 20;
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.close_fn = on_sock_close;
-    config.stack_size = 8192;
+    config.stack_size = 12288;
 
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) {
