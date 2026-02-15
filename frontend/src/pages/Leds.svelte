@@ -140,26 +140,36 @@
     gap: 0.5rem;
   }
   .btn {
-    padding: 0.5rem 1rem;
-    border: 1px solid #333;
+    padding: 0.45rem 1rem;
+    border: none;
     border-radius: 6px;
-    background: #2a2a3e;
-    color: #ccc;
+    background: #1a3a6a;
+    color: #e0e0e0;
     cursor: pointer;
     font-size: 0.85rem;
+    font-weight: 500;
+    transition: background 0.2s;
   }
-  .btn:hover { background: #3a3a50; }
+  .btn:hover { background: #2a4a8a; }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn.test { background: #1a3a5e; border-color: #2a5a8e; }
-  .btn.test:hover { background: #2a4a6e; }
+  .btn.test { background: #1a4a8a; }
+  .btn.test:hover { background: #2a5aaa; }
 
-  .group { margin-bottom: 0.5rem; }
+  .group {
+    background: #16213e;
+    border: 1px solid #1a3a6a;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
   .group h3 {
     margin: 0 0 0.5rem 0;
-    font-size: 0.9rem;
-    color: #999;
-    border-bottom: 1px solid #333;
-    padding-bottom: 0.25rem;
+    font-size: 0.8rem;
+    color: #7a8aa8;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid #1a3a6a44;
+    padding-bottom: 0.4rem;
   }
 
   .led-grid {
@@ -174,20 +184,20 @@
     align-items: center;
     gap: 4px;
     padding: 8px 4px;
-    border: 1px solid #333;
+    border: 1px solid #1a3a6a;
     border-radius: 8px;
-    background: #1e1e30;
-    color: #888;
+    background: #0f0f1a;
+    color: #7a8aa8;
     cursor: pointer;
     transition: all 0.15s;
   }
-  .led-btn:hover { background: #2a2a40; border-color: #555; }
+  .led-btn:hover { background: #1a2240; border-color: #2a4a7a; }
 
   .led-indicator {
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: #333;
+    background: #2a2a3e;
     transition: all 0.15s;
   }
 
@@ -195,14 +205,14 @@
     background: #ff4444;
     box-shadow: 0 0 8px #ff4444;
   }
-  .led-btn.on { border-color: #553333; color: #ddd; }
+  .led-btn.on { border-color: #5c2a2a; color: #e0e0e0; }
 
   .led-btn.blink .led-indicator {
     background: #ff8800;
     box-shadow: 0 0 8px #ff8800;
     animation: blink-pulse 0.8s infinite;
   }
-  .led-btn.blink { border-color: #554422; color: #ddd; }
+  .led-btn.blink { border-color: #5c4422; color: #e0e0e0; }
 
   @keyframes blink-pulse {
     0%, 100% { opacity: 1; }
@@ -210,7 +220,7 @@
   }
 
   .led-name {
-    font-size: 0.7rem;
+    font-size: 0.75rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -218,8 +228,8 @@
   }
 
   .hint {
-    font-size: 0.75rem;
-    color: #666;
+    font-size: 0.8rem;
+    color: #7a8aa8;
     text-align: center;
     margin-top: 0.5rem;
   }

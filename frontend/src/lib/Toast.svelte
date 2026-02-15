@@ -33,9 +33,9 @@
     animation: slide-up 0.25s ease-out;
     max-width: 90vw;
   }
-  .toast.success { background: #2d6a4f; color: #b7e4c7; }
-  .toast.error { background: #7a1a1a; color: #f8b4b4; }
-  .toast.info { background: #1a3a5c; color: #b0d4f1; }
+  .toast.success { background: #1a3a2a; color: #6ee7a0; border: 1px solid #2d6a4f; }
+  .toast.error { background: #3a1a1a; color: #f8b4b4; border: 1px solid #7a2a2a; }
+  .toast.info { background: #1a2a44; color: #b0d4f1; border: 1px solid #1a3a6a; }
   .toast button {
     background: none; border: none; color: inherit;
     cursor: pointer; font-size: 1.1rem; padding: 0; line-height: 1;

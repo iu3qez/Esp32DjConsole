@@ -39,12 +39,18 @@
     <button class:active={mode === 'cat'} onclick={() => mode = 'cat'}>CAT Sent</button>
   </div>
   <span class="count">{activeLog().length} events</span>
-  <button onclick={() => paused = !paused}>{paused ? 'Resume' : 'Pause'}</button>
+  <button class:active={paused} onclick={() => paused = !paused}>{paused ? 'Resume' : 'Pause'}</button>
   <button class="clear" onclick={clear}>Clear</button>
 </div>
 
 <div class="log">
   {#if mode === 'usb'}
+    <div class="log-header">
+      <span class="col-time">Time</span>
+      <span class="col-type">Type</span>
+      <span class="col-name">Control</span>
+      <span class="col-val">Value</span>
+    </div>
     {#each usbLog as ev}
       <div class="entry">
         <span class="time">{fmtTime(ev.ts)}</span>
@@ -56,6 +62,13 @@
       <div class="empty">Waiting for USB control events... Move a knob or press a button.</div>
     {/each}
   {:else}
+    <div class="log-header">
+      <span class="col-time">Time</span>
+      <span class="col-type">Exec</span>
+      <span class="col-name">Control</span>
+      <span class="col-cmd">Command</span>
+      <span class="col-cat">CAT String</span>
+    </div>
     {#each catEntries as ev}
       <div class="entry">
         <span class="time">{fmtTime(ev.ts)}</span>
@@ -72,47 +85,71 @@
 
 <style>
   .toolbar {
-    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;
   }
   .mode-toggle {
-    display: flex; border: 1px solid #0f3460; border-radius: 4px; overflow: hidden;
+    display: flex; border: 1px solid #1a3a6a; border-radius: 6px; overflow: hidden;
   }
   .mode-toggle button {
-    padding: 0.3rem 0.7rem; border: none; background: transparent;
-    color: #888; cursor: pointer; font-size: 0.8rem; transition: all 0.15s;
+    padding: 0.35rem 0.75rem; border: none; background: transparent;
+    color: #7a8aa8; cursor: pointer; font-size: 0.85rem; font-weight: 500;
+    transition: all 0.15s;
   }
-  .mode-toggle button:first-child { border-right: 1px solid #0f3460; }
-  .mode-toggle button.active { background: #0f3460; color: #e0e0e0; }
-  .mode-toggle button:hover:not(.active) { color: #ccc; }
-  .count { flex: 1; color: #888; font-size: 0.8rem; }
+  .mode-toggle button:first-child { border-right: 1px solid #1a3a6a; }
+  .mode-toggle button.active { background: #1a3a6a; color: #e0e0e0; }
+  .mode-toggle button:hover:not(.active) { color: #b0c0e0; background: rgba(255,255,255,0.03); }
+  .count { flex: 1; color: #7a8aa8; font-size: 0.85rem; }
   .toolbar > button {
-    padding: 0.3rem 0.8rem; border: none; border-radius: 4px;
-    background: #0f3460; color: #e0e0e0; cursor: pointer; font-size: 0.8rem;
+    padding: 0.4rem 0.9rem; border: none; border-radius: 6px;
+    background: #1a3a6a; color: #e0e0e0; cursor: pointer; font-size: 0.85rem;
+    font-weight: 500;
+    transition: background 0.2s;
   }
-  .toolbar > button:hover { background: #1a4a8a; }
-  .toolbar > button.clear { background: #5c1a1a; }
-  .toolbar > button.clear:hover { background: #8a2a2a; }
+  .toolbar > button:hover { background: #2a4a8a; }
+  .toolbar > button.active { background: #1a4a8a; color: #6ee7a0; }
+  .toolbar > button.clear { background: #3a1a1a; color: #e94560; }
+  .toolbar > button.clear:hover { background: #5c1a1a; }
 
   .log {
-    background: #0d1117;
-    border: 1px solid #0f3460;
-    border-radius: 6px;
-    padding: 0.5rem;
+    background: #0a0e18;
+    border: 1px solid #1a3a6a;
+    border-radius: 8px;
+    padding: 0;
     max-height: 70vh;
     overflow-y: auto;
-    font-family: monospace;
-    font-size: 0.8rem;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 0.85rem;
   }
+  .log-header {
+    display: flex; gap: 0.75rem; padding: 0.5rem 0.75rem;
+    background: #131d33;
+    border-bottom: 1px solid #1a3a6a;
+    position: sticky; top: 0; z-index: 1;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #7a8aa8;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .col-time { min-width: 7em; }
+  .col-type { min-width: 3.5em; }
+  .col-name { min-width: 10em; flex: 1; }
+  .col-val { min-width: 5em; }
+  .col-cmd { min-width: 10em; }
+  .col-cat { min-width: 6em; }
+
   .entry {
-    display: flex; gap: 0.75rem; padding: 0.15rem 0;
-    border-bottom: 1px solid #ffffff08;
+    display: flex; gap: 0.75rem; padding: 0.3rem 0.75rem;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    transition: background 0.15s;
   }
-  .time { color: #555; min-width: 7em; }
-  .type { color: #f9c74f; min-width: 3em; }
+  .entry:hover { background: rgba(233, 69, 96, 0.04); }
+  .time { color: #6b7280; min-width: 7em; }
+  .type { color: #f9c74f; min-width: 3.5em; font-weight: 500; }
   .cat-type { color: #43aa8b; }
-  .name { color: #e94560; min-width: 10em; }
-  .val { color: #52b788; }
+  .name { color: #e94560; min-width: 10em; flex: 1; }
+  .val { color: #6ee7a0; }
   .cmd { color: #90be6d; min-width: 10em; }
-  .cat-str { color: #577590; font-weight: bold; }
-  .empty { color: #555; padding: 2rem; text-align: center; }
+  .cat-str { color: #7a9ab8; font-weight: 600; }
+  .empty { color: #7a8aa8; padding: 2.5rem; text-align: center; }
 </style>

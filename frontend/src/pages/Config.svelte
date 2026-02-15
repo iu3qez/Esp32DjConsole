@@ -43,33 +43,39 @@
   }
 </script>
 
-<h2>Network</h2>
-<div class="form">
-  <label>WiFi SSID
-    <input type="text" bind:value={cfg.wifi_ssid} />
-  </label>
-  <label>WiFi Password
-    <input type="password" bind:value={newPass} placeholder={cfg.wifi_pass_set ? '(set - enter to change)' : '(not set)'} />
-  </label>
-</div>
+<section class="panel">
+  <h2>Network</h2>
+  <div class="form">
+    <label>WiFi SSID
+      <input type="text" bind:value={cfg.wifi_ssid} />
+    </label>
+    <label>WiFi Password
+      <input type="password" bind:value={newPass} placeholder={cfg.wifi_pass_set ? '(set - enter to change)' : '(not set)'} />
+    </label>
+  </div>
+</section>
 
-<h2>Thetis CAT Connection</h2>
-<div class="form">
-  <label>Host <input type="text" bind:value={cfg.cat_host} placeholder="192.168.1.100" /></label>
-  <label>Port <input type="number" bind:value={cfg.cat_port} /></label>
-</div>
+<section class="panel">
+  <h2>Thetis CAT Connection</h2>
+  <div class="form">
+    <label>Host <input type="text" bind:value={cfg.cat_host} placeholder="192.168.1.100" /></label>
+    <label>Port <input type="number" bind:value={cfg.cat_port} /></label>
+  </div>
+</section>
 
-<h2>Debug</h2>
-<div class="form">
-  <label>USB Debug Level
-    <select bind:value={cfg.debug_level}>
-      <option value={0}>Off</option>
-      <option value={1}>Control changes</option>
-      <option value={2}>Changes + hex diff</option>
-      <option value={3}>Full hex dump</option>
-    </select>
-  </label>
-</div>
+<section class="panel">
+  <h2>Debug</h2>
+  <div class="form">
+    <label>USB Debug Level
+      <select bind:value={cfg.debug_level}>
+        <option value={0}>Off</option>
+        <option value={1}>Control changes</option>
+        <option value={2}>Changes + hex diff</option>
+        <option value={3}>Full hex dump</option>
+      </select>
+    </label>
+  </div>
+</section>
 
 <button class="save" onclick={requestSave} disabled={saving}>{saving ? 'Saving...' : 'Save Configuration'}</button>
 
@@ -83,18 +89,26 @@
 {/if}
 
 <style>
-  h2 { font-size: 0.9rem; color: #e94560; margin: 1rem 0 0.5rem; }
-  .form { display: flex; flex-direction: column; gap: 0.5rem; }
-  label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; color: #888; }
+  h2 { font-size: 1rem; color: #e94560; margin: 0 0 0.75rem; }
+  .form { display: flex; flex-direction: column; gap: 0.6rem; }
+  label {
+    display: flex; flex-direction: column; gap: 0.3rem;
+    font-size: 0.85rem; color: #7a8aa8;
+  }
   input, select {
-    padding: 0.4rem; background: #16213e; border: 1px solid #0f3460;
-    color: #e0e0e0; border-radius: 4px; font-size: 0.85rem;
+    padding: 0.5rem 0.6rem; background: #0f0f1a; border: 1px solid #1a3a6a;
+    color: #e0e0e0; border-radius: 6px; font-size: 0.9rem;
+    transition: border-color 0.2s;
   }
+  input:focus, select:focus { border-color: #e94560; outline: none; }
+  input::placeholder { color: #4a5568; }
   .save {
-    margin-top: 1rem; width: 100%; padding: 0.6rem;
-    background: #0f3460; color: #e0e0e0; border: none;
-    border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+    margin-top: 0.5rem; width: 100%; padding: 0.65rem;
+    background: #1a4a8a; color: #e0e0e0; border: none;
+    border-radius: 8px; cursor: pointer; font-size: 0.9rem;
+    font-weight: 500;
+    transition: background 0.2s;
   }
-  .save:hover { background: #1a4a8a; }
+  .save:hover { background: #2a5aaa; }
   .save:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
