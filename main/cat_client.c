@@ -342,13 +342,18 @@ esp_err_t cat_client_send(const char *cmd)
 
     char buf[CAT_MAX_CMD_LEN];
     int len = strlen(cmd);
+    if (len >= (int)sizeof(buf) - 1) {
+        len = (int)sizeof(buf) - 2;  // Leave room for ';' + '\0'
+    }
 
     // Append ';' if missing
     if (len > 0 && cmd[len - 1] != ';') {
-        snprintf(buf, sizeof(buf), "%s;", cmd);
+        memcpy(buf, cmd, len);
+        buf[len] = ';';
+        buf[len + 1] = '\0';
     } else {
-        strncpy(buf, cmd, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
+        memcpy(buf, cmd, len);
+        buf[len] = '\0';
     }
 
     len = strlen(buf);
