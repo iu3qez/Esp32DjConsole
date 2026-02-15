@@ -48,6 +48,7 @@ typedef enum {
 typedef struct {
     uint16_t         id;           // Unique ID (stable across firmware versions)
     const char      *name;         // Human-readable: "VFO A Tune", "Band Up"
+    const char      *description;  // Full description (NULL if same as name)
     cmd_category_t   category;
     cmd_exec_type_t  exec_type;
     const char      *cat_cmd;      // CAT prefix: "ZZFA", "ZZBU", etc.

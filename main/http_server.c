@@ -394,6 +394,8 @@ static esp_err_t api_commands_get_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(obj, "cat", db[i].category);
         cJSON_AddStringToObject(obj, "cat_name", cmd_category_name(db[i].category));
         cJSON_AddNumberToObject(obj, "exec", db[i].exec_type);
+        if (db[i].description)
+            cJSON_AddStringToObject(obj, "desc", db[i].description);
         cJSON_AddItemToArray(arr, obj);
     }
 

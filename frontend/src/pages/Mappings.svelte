@@ -195,7 +195,7 @@
         <h3 class="cat-header">{catName}</h3>
         {#each cmds as cmd}
           <div class="cmd-row">
-            <span class="cmd-name">{cmd.name}</span>
+            <span class="cmd-name" title={cmd.desc || cmd.name}>{cmd.name}</span>
             <span class="cmd-type">{EXEC_LABELS[cmd.exec] || '?'}</span>
             {#if mappedControl(cmd.id)}
               <span class="cmd-mapped">{mappedControl(cmd.id)}</span>

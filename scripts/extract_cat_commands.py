@@ -80,8 +80,12 @@ def extract_commands(source: str) -> list[dict]:
         # Check if it delegates to another command
         delegates_to = extract_delegation(body)
 
-        # Detect if this is a toggle: (s == "0" || s == "1") pattern
-        is_toggle = bool(re.search(r's\s*==\s*"0"\s*\|\|\s*s\s*==\s*"1"', body))
+        # Detect if this is a toggle: s == "0" and s == "1" in body
+        # Catches both inline (s == "0" || s == "1") and separate-line patterns
+        has_0 = 's == "0"' in body
+        has_1 = 's == "1"' in body
+        # Not a toggle if body also checks multi-digit values (e.g. s == "00", s == "12")
+        is_toggle = has_0 and has_1 and not re.search(r's\s*==\s*"\d{2,}"', body)
 
         # Determine command type (ZZ extended vs standard Kenwood)
         cmd_type = 'extended' if cmd_name.startswith('ZZ') else 'standard'
@@ -129,10 +133,30 @@ def parse_comment(comment_block: str) -> str:
         # Remove // prefix and optional -W2PA tag
         line = re.sub(r'^//+\s*', '', line)
         line = re.sub(r'^-W2PA\s*', '', line)
+        # Strip XML tags (<summary>, </summary>, etc.)
+        line = re.sub(r'</?[a-zA-Z][^>]*>', '', line)
         line = line.strip()
         if line:
             lines.append(line)
     return ' '.join(lines)
+
+
+def clean_name(description: str, cmd_name: str) -> str:
+    """Create a clean, short display name from description."""
+    if not description:
+        return cmd_name
+    name = description
+    # Strip common boilerplate prefixes
+    name = re.sub(r'^(?:Sets or reads the|Reads or sets the|Sets or reads|Reads or sets|Sets the|Reads the|Gets or sets the|Gets or sets)\s+', '', name, flags=re.IGNORECASE)
+    # Trim trailing period
+    name = name.rstrip('.')
+    # Capitalize first letter
+    if name:
+        name = name[0].upper() + name[1:]
+    # Truncate to 35 chars
+    if len(name) > 35:
+        name = name[:32] + '...'
+    return name or cmd_name
 
 
 def extract_properties(body: str) -> list[str]:
@@ -264,9 +288,9 @@ def detect_exec_type(cmd: dict) -> tuple[str, int, int, int]:
     if cmd.get('delegates_to'):
         return ('CMD_CAT_BUTTON', 0, 0, 0)
 
-    # Read/write with parameter but no detected range -> toggle (common pattern)
-    if cmd['rw'] == 'read/write' and cmd['has_param']:
-        return ('CMD_CAT_TOGGLE', 1, 0, 1)
+    # Has parameter but no detected range -> SET with sensible defaults
+    if cmd['has_param']:
+        return ('CMD_CAT_SET', 3, 0, 100)
 
     # Fallback
     return ('CMD_CAT_BUTTON', 0, 0, 0)
@@ -330,6 +354,7 @@ def generate_c(commands: list[dict], overrides_path: Path | None = None) -> str:
             entry = {
                 'id': ov['id'],
                 'name': ov['name'],
+                'description': ov.get('description'),
                 'category': ov['category'],
                 'exec_type': ov['exec_type'],
                 'cat_cmd': cat_cmd,
@@ -351,17 +376,14 @@ def generate_c(commands: list[dict], overrides_path: Path | None = None) -> str:
         exec_type, digits, vmin, vmax = detect_exec_type(cmd)
         category = detect_category(cmd)
 
-        # Build name from description (truncate to reasonable length)
-        name = cmd['description']
-        if not name:
-            name = zz
-        # Shorten: take first ~40 chars
-        if len(name) > 40:
-            name = name[:37] + '...'
+        # Build clean short name and full description
+        name = clean_name(cmd['description'], zz)
+        full_desc = cmd['description'] if cmd['description'] != name else None
 
         entry = {
             'id': 0,  # Will be assigned below
             'name': name,
+            'description': full_desc,
             'category': category,
             'exec_type': exec_type,
             'cat_cmd': zz,
@@ -379,6 +401,7 @@ def generate_c(commands: list[dict], overrides_path: Path | None = None) -> str:
         entry = {
             'id': ov['id'],
             'name': ov['name'],
+            'description': ov.get('description'),
             'category': ov['category'],
             'exec_type': ov['exec_type'],
             'cat_cmd': cat_cmd,
@@ -434,9 +457,16 @@ def generate_c(commands: list[dict], overrides_path: Path | None = None) -> str:
         # Format the C struct initializer
         cmd2 = f'"{entry["cat_cmd2"]}"' if entry['cat_cmd2'] else 'NULL'
         name_escaped = entry['name'].replace('"', '\\"')
+        desc = entry.get('description')
+        if desc:
+            desc_escaped = desc.replace('"', '\\"')
+            desc_c = f'"{desc_escaped}"'
+        else:
+            desc_c = 'NULL'
 
         line = (f'    {{ {entry["id"]:4d}, '
                 f'"{name_escaped}", '
+                f'{desc_c}, '
                 f'{entry["category"]:14s}, '
                 f'{entry["exec_type"]:16s}, '
                 f'"{entry["cat_cmd"]}", '
