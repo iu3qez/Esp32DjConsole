@@ -76,6 +76,11 @@ static long s_vfo_b_freq = 0;
 static bool s_vfo_a_synced = false;
 static bool s_vfo_b_synced = false;
 
+// Filter edge tracking for FILTER_WIDTH exec type (synced from Thetis ZZFH/ZZFL)
+static int s_filter_hi = 1000;   // default upper
+static int s_filter_lo = 25;     // default lower
+static bool s_filter_synced = false;
+
 // Tuning step from Thetis ZZAC response (index 0-25 -> Hz)
 static const int s_step_table[] = {
     1, 2, 10, 25, 50, 100, 250, 500,           // 0-7
@@ -362,6 +367,30 @@ static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
         }
         notify_cat(control_name, cmd, buf);
         ESP_LOGD(TAG, "WHEEL [%s] delta=%d x%d", cmd->name, delta, count);
+        break;
+    }
+
+    case CMD_CAT_FILTER_WIDTH: {
+        // Scale 0-255 knob to width range (value_min..value_max, default 50-6000 Hz)
+        if (!s_filter_synced) {
+            ESP_LOGW(TAG, "FILTER_WIDTH [%s] skipped — filter not synced from Thetis yet", cmd->name);
+            break;
+        }
+        int wmin = cmd->value_min > 0 ? cmd->value_min : 50;
+        int wmax = cmd->value_max > 0 ? cmd->value_max : 6000;
+        int width = wmin + (new_val * (wmax - wmin)) / 255;
+        // Compute center from current filter edges
+        int center = (s_filter_hi + s_filter_lo) / 2;
+        if (center < 0) center = -center;  // abs for LSB
+        // Send ZZSF with center (4 digits) + width (4 digits)
+        snprintf(buf, sizeof(buf), "ZZSF%04d%04d;", center, width);
+        cat_client_send(buf);
+        // Update tracked hi/lo to match what we just sent
+        s_filter_hi = center + width / 2;
+        s_filter_lo = center - width / 2;
+        notify_cat(control_name, cmd, buf);
+        ESP_LOGD(TAG, "FILTER_WIDTH [%s] raw=%d -> width=%d center=%d -> %s",
+                 cmd->name, new_val, width, center, buf);
         break;
     }
     }
@@ -718,6 +747,14 @@ void mapping_engine_on_cat_response(const char *cmd, const char *value)
             s_tune_step_hz = s_step_table[idx];
             ESP_LOGI(TAG, "Sync tune step = %d Hz (index %d)", s_tune_step_hz, idx);
         }
+    } else if (strcmp(cmd, "ZZFH") == 0) {
+        s_filter_hi = atoi(value);
+        s_filter_synced = true;
+        ESP_LOGI(TAG, "Sync filter hi = %d Hz", s_filter_hi);
+    } else if (strcmp(cmd, "ZZFL") == 0) {
+        s_filter_lo = atoi(value);
+        s_filter_synced = true;
+        ESP_LOGI(TAG, "Sync filter lo = %d Hz", s_filter_lo);
     }
 
     // Generic toggle sync: if response matches a tracked toggle, update state + LED
@@ -736,14 +773,18 @@ void mapping_engine_on_cat_response(const char *cmd, const char *value)
 
 void mapping_engine_request_sync(void)
 {
-    ESP_LOGI(TAG, "Requesting VFO/step/toggle sync from Thetis");
+    ESP_LOGI(TAG, "Requesting VFO/step/filter/toggle sync from Thetis");
     s_vfo_a_synced = false;
     s_vfo_b_synced = false;
+    s_filter_synced = false;
     cat_client_send("ZZFA;");
     cat_client_send("ZZFB;");
     // Set tuning step to 10 Hz (index 2), then query back to confirm
     cat_client_send("ZZAC02;");
     cat_client_send("ZZAC;");
+    // Query filter edges for FILTER_WIDTH exec type
+    cat_client_send("ZZFH;");
+    cat_client_send("ZZFL;");
 
     // Query all tracked toggle states
     for (int i = 0; i < s_toggle_count; i++) {

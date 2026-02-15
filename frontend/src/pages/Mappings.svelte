@@ -5,7 +5,7 @@
   import { success, error } from '../lib/toast.js';
   import ConfirmDialog from '../lib/ConfirmDialog.svelte';
 
-  const EXEC_LABELS = ['Button', 'Toggle', 'Knob', 'Freq', 'Wheel'];
+  const EXEC_LABELS = ['Button', 'Toggle', 'Knob', 'Freq', 'Wheel', 'Filter W'];
 
   let commands = $state([]);
   let mappings = $state([]);

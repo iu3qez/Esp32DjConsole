@@ -12,6 +12,7 @@
   {"cmd": "ZZXU", "id": 907, "name": "XIT Tune", "category": "CAT_SPLIT_RIT", "exec_type": "CMD_CAT_WHEEL", "cat_cmd2": "ZZXD"},
   {"cmd": "ZZCU", "id": 1003, "name": "CW Speed Inc", "category": "CAT_CW", "exec_type": "CMD_CAT_WHEEL", "cat_cmd2": "ZZCD"},
   {"cmd": "ZZZA", "id": 1111, "name": "Zoom Inc", "category": "CAT_MISC", "exec_type": "CMD_CAT_WHEEL", "cat_cmd2": "ZZZB"},
+  {"cmd": "ZZSF", "id": 626, "name": "Filter Width", "category": "CAT_FILTER", "exec_type": "CMD_CAT_FILTER_WIDTH", "value_digits": 8, "value_min": 50, "value_max": 6000},
 
   {"_comment": "Band buttons with fixed value_min=value_max for ZZBS"},
   {"cmd": "ZZBS/160", "id": 202, "name": "160m", "category": "CAT_BAND", "exec_type": "CMD_CAT_BUTTON", "cat_cmd": "ZZBS", "value_digits": 3, "value_min": 160, "value_max": 160},

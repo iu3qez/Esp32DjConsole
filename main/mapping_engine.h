@@ -25,7 +25,8 @@ typedef enum {
     CMD_CAT_TOGGLE,   // Track state, send ZZXX0/ZZXX1 on press
     CMD_CAT_SET,      // Knob/slider: scale 0-255 -> value_min..value_max
     CMD_CAT_FREQ,     // Encoder: delta * param Hz, send ZZFA{11-digit freq}
-    CMD_CAT_WHEEL,    // Encoder: relative inc/dec via two CAT commands
+    CMD_CAT_WHEEL,        // Encoder: relative inc/dec via two CAT commands
+    CMD_CAT_FILTER_WIDTH, // Knob: set filter width via ZZSF, center tracked from ZZFH/ZZFL
 } cmd_exec_type_t;
 
 /** Command categories for UI grouping. */
