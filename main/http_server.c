@@ -185,7 +185,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
                             uint8_t note = (uint8_t)note_j->valueint;
                             const char *st = state_j->valuestring;
                             if (strcmp(st, "on") == 0) dj_led_set(note, true);
-                            else if (strcmp(st, "off") == 0) { dj_led_set(note, false); dj_led_blink(note, false); }
+                            else if (strcmp(st, "off") == 0) { dj_led_blink(note, false); dj_led_set(note, false); }
                             else if (strcmp(st, "blink") == 0) dj_led_blink(note, true);
                             char ws_buf[64];
                             snprintf(ws_buf, sizeof(ws_buf), "{\"type\":\"led\",\"note\":%d,\"state\":\"%s\"}", note, st);
@@ -737,11 +737,13 @@ static esp_err_t api_leds_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    ESP_LOGI(TAG, "LED API: note=%d state=%s", note, state);
+
     if (strcmp(state, "on") == 0) {
         dj_led_set(note, true);
     } else if (strcmp(state, "off") == 0) {
+        dj_led_blink(note, false);  // must clear blink first (sends note+48 off)
         dj_led_set(note, false);
-        dj_led_blink(note, false);
     } else if (strcmp(state, "blink") == 0) {
         dj_led_blink(note, true);
     }

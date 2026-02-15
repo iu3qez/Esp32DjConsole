@@ -22,9 +22,11 @@ static void send_note(uint8_t note, uint8_t velocity)
 {
     uint8_t pkt[3] = {0x90, note, velocity};
     esp_err_t err = usb_dj_host_send(pkt, sizeof(pkt));
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "LED send failed note=%d vel=0x%02X: %s",
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "LED send note=%d vel=0x%02X: %s",
                  note, velocity, esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "LED note=%d vel=0x%02X OK", note, velocity);
     }
 }
 
@@ -46,10 +48,17 @@ void dj_led_set(uint8_t note, bool on)
 {
     if (note > LED_NOTE_MAX) return;
 
+    uint8_t old_state = s_led_state[note];
     uint8_t new_state = on ? LED_STATE_ON : LED_STATE_OFF;
-    if (s_led_state[note] == new_state) return;
+    if (old_state == new_state) return;
 
     s_led_state[note] = new_state;
+
+    // If transitioning from blink, turn off blink note first
+    if (old_state == LED_STATE_BLINK) {
+        send_note(note + LED_BLINK_OFFSET, 0x00);
+    }
+
     send_note(note, on ? 0x7F : 0x00);
 }
 
@@ -57,10 +66,12 @@ void dj_led_blink(uint8_t note, bool blink)
 {
     if (note > LED_NOTE_MAX) return;
 
+    uint8_t old_state = s_led_state[note];
     uint8_t new_state = blink ? LED_STATE_BLINK : LED_STATE_OFF;
-    if (s_led_state[note] == new_state) return;
+    if (old_state == new_state) return;
 
     s_led_state[note] = new_state;
+
     if (blink) {
         // Turn off solid first, then send blink note
         send_note(note, 0x00);
