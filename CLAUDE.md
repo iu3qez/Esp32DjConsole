@@ -1,8 +1,8 @@
-# ESP32 DJ Console - Hercules DJ Console MP3 e2 to Thetis CAT/TCI Bridge
+# ESP32 DJ Console - Hercules DJ Console MP3 e2 to Thetis CAT Bridge
 
 ## Project Overview
 
-ESP32-S3 firmware that acts as a USB host for the Hercules DJ Console MP3 e2 (VID: 0x06f8, PID: 0xb105), translates its inputs to CAT/TCI commands over TCP/WebSocket, and serves a Svelte web GUI for mapping customization.
+ESP32-S3 firmware that acts as a USB host for the Hercules DJ Console MP3 e2 (VID: 0x06f8, PID: 0xb105), translates its inputs to Kenwood CAT commands over TCP, and serves a Svelte web GUI for mapping customization.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ ESP32-S3 firmware that acts as a USB host for the Hercules DJ Console MP3 e2 (VI
         |
         +-- WiFi (STA mode, connects to local network)
         |
-        +-- TCI WebSocket client --> Thetis (ws://host:50001)
+        +-- CAT TCP client --> Thetis (Kenwood CAT protocol)
         |   (frequency, mode, volume, filters, PTT, etc.)
         |
         +-- HTTP server (port 80)
@@ -91,11 +91,9 @@ Esp32DjConsole/
     main.c                    # Entry point: WiFi, USB host, HTTP server init
     usb_dj_host.c             # USB host driver for Hercules DJ Console
     usb_dj_host.h
-    tci_client.c              # TCI WebSocket client for Thetis
-    tci_client.h
-    cat_client.c              # Kenwood CAT TCP client (fallback)
+    cat_client.c              # Kenwood CAT TCP client
     cat_client.h
-    mapping_engine.c          # DJ control -> CAT/TCI command mapping
+    mapping_engine.c          # DJ control -> CAT command mapping
     mapping_engine.h
     http_server.c             # HTTP server: static files + REST API + WS
     http_server.h
@@ -125,13 +123,7 @@ Esp32DjConsole/
 - **Dials/Sliders (type 1):** Treble/Medium/Bass/Vol per deck, XFader (0x00-0xFF)
 - **Jog wheels (type 2):** Jog_A, Jog_B, Pitch_A, Pitch_B (rotary encoders, 0x00-0xFF wrap)
 
-### TCI Protocol (Thetis)
-
-- **Transport:** WebSocket, default port 50001
-- **Format:** ASCII text, `command:arg1,arg2,...;`
-- **Key commands:** `vfo:trx,vfo,freq;`, `modulation:trx,mode;`, `volume:level;`, `drive:level;`, `trx:trx,state;`, `rx_smeter:trx,vfo,level;`
-
-### Kenwood CAT (fallback)
+### Kenwood CAT Protocol
 
 - **Transport:** TCP
 - **Format:** ASCII, `COMMAND[params];`
@@ -149,7 +141,7 @@ GND             --> USB GND (black)
 ## Coding Conventions
 
 - Pure C (ESP-IDF style), no C++ unless necessary
-- FreeRTOS tasks for USB host, TCI client, and HTTP server
+- FreeRTOS tasks for USB host, CAT client, and HTTP server
 - Use ESP_LOG macros for logging (ESP_LOGI, ESP_LOGW, ESP_LOGE)
 - Config stored in NVS (Non-Volatile Storage)
 - Control mappings stored as JSON in NVS, editable via web GUI
