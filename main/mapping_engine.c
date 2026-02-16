@@ -71,16 +71,23 @@ static struct {
 static int s_toggle_count = 0;
 
 // VFO freq tracking for FREQ exec type (synced from Thetis via CAT responses)
-static long s_vfo_a_freq = 0;  // 0 = not yet synced from Thetis
-static long s_vfo_b_freq = 0;
-static bool s_vfo_a_synced = false;
-static bool s_vfo_b_synced = false;
+typedef struct {
+    long freq;
+    bool synced;
+} vfo_state_t;
+
+static vfo_state_t s_vfo_a = { .freq = 0, .synced = false };
+static vfo_state_t s_vfo_b = { .freq = 0, .synced = false };
 
 // Filter edge tracking for FILTER_WIDTH exec type (synced from Thetis ZZFH/ZZFL)
-static int s_filter_hi = 1000;   // default upper (updated from ZZFH)
-static int s_filter_lo = 25;     // default lower (updated from ZZFL)
-static int s_filter_width = 0;   // tracked width for encoder-relative mode (0 = use current edges)
-static bool s_filter_synced = false;  // must sync from Thetis before first use
+typedef struct {
+    int hi;         // Upper edge (Hz), from ZZFH
+    int lo;         // Lower edge (Hz), from ZZFL
+    int width;      // Tracked width for encoder-relative mode (0 = use current edges)
+    bool synced;    // Must sync from Thetis before first use
+} filter_state_t;
+
+static filter_state_t s_filter = { .hi = 1000, .lo = 25, .width = 0, .synced = false };
 
 // Tuning step from Thetis ZZAC response (index 0-25 -> Hz)
 static const int s_step_table[] = {
@@ -278,218 +285,232 @@ static void notify_cat(const char *control_name, const thetis_cmd_t *cmd, const 
     if (s_cat_cb) s_cat_cb(control_name, cmd->name, cmd->exec_type, cat_str);
 }
 
+static void exec_button(const thetis_cmd_t *cmd, const char *control_name,
+                        dj_control_type_t ctrl_type, uint8_t new_val)
+{
+    char buf[32];
+    // Only fire on button press (not release), or on any encoder/dial change
+    if (ctrl_type == DJ_CTRL_BUTTON && new_val == 0) return;
+    if (cmd->value_digits > 0) {
+        snprintf(buf, sizeof(buf), "%s%0*d;", cmd->cat_cmd,
+                 cmd->value_digits, cmd->value_min);
+    } else {
+        snprintf(buf, sizeof(buf), "%s;", cmd->cat_cmd);
+    }
+    cat_client_send(buf);
+    notify_cat(control_name, cmd, buf);
+    ESP_LOGI(TAG, "CMD [%s] -> %s", cmd->name, buf);
+    // Re-query step after ZZSU/ZZSD so local step stays in sync
+    if (strcmp(cmd->cat_cmd, "ZZSU") == 0 || strcmp(cmd->cat_cmd, "ZZSD") == 0) {
+        cat_client_send("ZZAC;");
+    }
+}
+
+static void exec_toggle(const thetis_cmd_t *cmd, const char *control_name,
+                         dj_control_type_t ctrl_type, uint8_t new_val)
+{
+    char buf[32];
+    if (ctrl_type == DJ_CTRL_BUTTON && new_val == 0) return;
+    bool *state = find_toggle(cmd->id, cmd->cat_cmd);
+    if (!state) return;
+    *state = !(*state);
+    snprintf(buf, sizeof(buf), "%s%0*d;", cmd->cat_cmd,
+             cmd->value_digits, *state ? cmd->value_max : cmd->value_min);
+    cat_client_send(buf);
+    notify_cat(control_name, cmd, buf);
+    ESP_LOGI(TAG, "TOGGLE [%s] -> %s (state=%d)", cmd->name, buf, *state);
+}
+
+static void exec_set(const thetis_cmd_t *cmd, const char *control_name,
+                     dj_control_type_t ctrl_type, uint8_t old_val, uint8_t new_val, int32_t param)
+{
+    char buf[32];
+    int val;
+    if (ctrl_type == DJ_CTRL_ENCODER) {
+        // Encoder: relative inc/dec, step = param (default 1)
+        int8_t delta = encoder_delta(old_val, new_val);
+        if (delta == 0) return;
+        int step = (param > 0) ? param : 1;
+        int32_t *tracked = find_set_value(cmd->id, cmd->value_min, cmd->value_max);
+        if (!tracked) return;
+        *tracked += delta * step;
+        if (*tracked > cmd->value_max) *tracked = cmd->value_max;
+        if (*tracked < cmd->value_min) *tracked = cmd->value_min;
+        val = *tracked;
+    } else {
+        // Knob/slider: scale 0-255 to value_min..value_max
+        int range = cmd->value_max - cmd->value_min;
+        val = cmd->value_min + (new_val * range) / 255;
+    }
+    snprintf(buf, sizeof(buf), "%s%0*d;", cmd->cat_cmd,
+             cmd->value_digits, val);
+    cat_client_send(buf);
+    notify_cat(control_name, cmd, buf);
+    ESP_LOGD(TAG, "SET [%s] raw=%d -> val=%d -> %s", cmd->name, new_val, val, buf);
+}
+
+static void exec_freq(const thetis_cmd_t *cmd, const char *control_name,
+                      dj_control_type_t ctrl_type, uint8_t old_val, uint8_t new_val, int32_t param)
+{
+    char buf[32];
+    // Read-modify-write VFO frequency (same logic as midi2cat ChangeFreqVfoA/B)
+    // Step from Thetis ZZAC, velocity-scaled by wheel speed
+    int8_t delta = 0;
+    if (ctrl_type == DJ_CTRL_ENCODER) {
+        delta = encoder_delta(old_val, new_val);
+    } else if (ctrl_type == DJ_CTRL_BUTTON) {
+        if (new_val == 0) return;
+        delta = (param > 0) ? 1 : -1;  // Button direction from param sign
+    } else {
+        delta = (new_val > old_val) ? 1 : -1;
+    }
+    if (delta == 0) return;
+
+    vfo_state_t *vfo = NULL;
+    const char *vfo_label = "?";
+    if (strcmp(cmd->cat_cmd, "ZZFA") == 0) {
+        vfo = &s_vfo_a;
+        vfo_label = "A";
+    } else if (strcmp(cmd->cat_cmd, "ZZFB") == 0) {
+        vfo = &s_vfo_b;
+        vfo_label = "B";
+    }
+    if (!vfo) return;
+
+    // Check idle gap BEFORE velocity_multiplier() updates s_last_freq_tick_us
+    int64_t now_us = esp_timer_get_time();
+    int64_t gap = now_us - s_last_freq_tick_us;
+
+    ESP_LOGI(TAG, "VFO_DBG [%s] VFO_%s tick: delta=%d old=%d new=%d synced=%d "
+             "cached_freq=%ld gap=%lld ms",
+             cmd->name, vfo_label, delta, old_val, new_val,
+             vfo->synced, vfo->freq, gap / 1000);
+
+    if (!vfo->synced) {
+        ESP_LOGW(TAG, "VFO_DBG [%s] SKIPPED — VFO_%s not synced yet", cmd->name, vfo_label);
+        return;
+    }
+
+    // Re-sync from Thetis on first tick after idle (>1s gap).
+    // Catches band/freq changes made in Thetis UI. Skip this tick;
+    // response arrives before next tick so subsequent ticks use fresh data.
+    if (gap > 1000000) {  // >1 second since last FREQ tick
+        vfo->synced = false;
+        const char *query = (strcmp(cmd->cat_cmd, "ZZFA") == 0) ? "ZZFA;" : "ZZFB;";
+        cat_client_send(query);
+        ESP_LOGI(TAG, "VFO_DBG [%s] RE-SYNC: gap=%lld ms > 1s, sent %s "
+                 "invalidated VFO_%s (was %ld Hz)",
+                 cmd->name, gap / 1000, query, vfo_label, vfo->freq);
+        // Update timestamp so velocity_multiplier starts fresh after resync
+        s_last_freq_tick_us = now_us;
+        return;
+    }
+
+    // Step: use Thetis step (from ZZAC), scaled by tick-rate velocity
+    int base_step = s_tune_step_hz;
+    int mult = velocity_multiplier();
+    int step_hz = base_step * mult;
+
+    long old_freq = vfo->freq;
+    int direction = (delta > 0) ? 1 : -1;
+    vfo->freq = snap_tune(vfo->freq, step_hz, direction);
+    if (vfo->freq < 100000) vfo->freq = 100000;
+    if (vfo->freq > 54000000) vfo->freq = 54000000;
+    snprintf(buf, sizeof(buf), "%s%011ld;", cmd->cat_cmd, vfo->freq);
+    cat_client_send(buf);
+    notify_cat(control_name, cmd, buf);
+    ESP_LOGI(TAG, "VFO_DBG [%s] TUNE: %ld -> %ld Hz (dir=%d step=%d x%d=%d) cmd='%s'",
+             cmd->name, old_freq, vfo->freq, direction, base_step, mult, step_hz, buf);
+}
+
+static void exec_wheel(const thetis_cmd_t *cmd, const char *control_name,
+                       dj_control_type_t ctrl_type, uint8_t old_val, uint8_t new_val)
+{
+    char buf[32];
+    int8_t delta = 0;
+    if (ctrl_type == DJ_CTRL_ENCODER) {
+        delta = encoder_delta(old_val, new_val);
+    } else if (ctrl_type == DJ_CTRL_BUTTON) {
+        if (new_val == 0) return;
+        delta = 1;
+    }
+    // Send inc command for positive delta, dec for negative
+    const char *c = (delta > 0) ? cmd->cat_cmd : cmd->cat_cmd2;
+    if (!c) return;
+    int count = abs(delta);
+    if (count > 10) count = 10;  // Sanity limit
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "%s;", c);
+        cat_client_send(buf);
+    }
+    notify_cat(control_name, cmd, buf);
+    ESP_LOGD(TAG, "WHEEL [%s] delta=%d x%d", cmd->name, delta, count);
+}
+
+static void exec_filter_width(const thetis_cmd_t *cmd, const char *control_name,
+                              dj_control_type_t ctrl_type, uint8_t old_val, uint8_t new_val, int32_t param)
+{
+    char buf[32];
+    ESP_LOGI(TAG, "FW_DBG [%s] tick: ctrl_type=%d old=%d new=%d, synced=%d, lo=%d hi=%d width=%d",
+             control_name, ctrl_type, old_val, new_val, s_filter.synced,
+             s_filter.lo, s_filter.hi, s_filter.width);
+    if (!s_filter.synced) {
+        cat_client_send("ZZFH;");
+        cat_client_send("ZZFL;");
+        ESP_LOGW(TAG, "FW_DBG [%s] NOT SYNCED — querying ZZFH/ZZFL, skipping tick", cmd->name);
+        return;
+    }
+    int wmin = cmd->value_min > 0 ? cmd->value_min : 50;
+    int wmax = cmd->value_max > 0 ? cmd->value_max : 6000;
+    int step = (param > 0) ? param : 50;  // default 50 Hz per encoder tick
+    int width;
+
+    if (ctrl_type == DJ_CTRL_ENCODER) {
+        // Encoder: relative inc/dec of tracked width
+        int8_t delta = encoder_delta(old_val, new_val);
+        if (delta == 0) return;
+        // Initialize tracked width from current filter edges on first use
+        if (s_filter.width == 0) {
+            s_filter.width = s_filter.hi - s_filter.lo;
+            if (s_filter.width < wmin) s_filter.width = wmin;
+        }
+        s_filter.width += delta * step;
+        if (s_filter.width < wmin) s_filter.width = wmin;
+        if (s_filter.width > wmax) s_filter.width = wmax;
+        width = s_filter.width;
+    } else {
+        // Knob/slider: scale 0-255 to width range
+        width = wmin + (new_val * (wmax - wmin)) / 255;
+        s_filter.width = width;
+    }
+
+    int center = (s_filter.hi + s_filter.lo) / 2;
+    ESP_LOGI(TAG, "FW_DBG [%s] calc: wmin=%d wmax=%d step=%d raw_center=%d width=%d",
+             cmd->name, wmin, wmax, step, center, width);
+    if (center < 0) center = -center;  // abs for LSB
+    // ZZSF takes center (4 digits) + width (4 digits) per Thetis CATCommands.cs
+    snprintf(buf, sizeof(buf), "ZZSF%04d%04d;", center, width);
+    ESP_LOGI(TAG, "FW_DBG [%s] result: center=%d width=%d CAT_CMD='%s'",
+             cmd->name, center, width, buf);
+    cat_client_send(buf);
+    // Update local tracking to reflect what Thetis will set
+    s_filter.lo = center - width / 2;
+    s_filter.hi = center + width / 2;
+    if (s_filter.lo < 0) s_filter.lo = 0;
+    notify_cat(control_name, cmd, buf);
+}
+
 static void execute_command(const thetis_cmd_t *cmd, const char *control_name,
                             dj_control_type_t ctrl_type,
                             uint8_t old_val, uint8_t new_val, int32_t param)
 {
-    char buf[32];
-
     switch (cmd->exec_type) {
-
-    case CMD_CAT_BUTTON:
-        // Only fire on button press (not release), or on any encoder/dial change
-        if (ctrl_type == DJ_CTRL_BUTTON && new_val == 0) return;
-        if (cmd->value_digits > 0) {
-            snprintf(buf, sizeof(buf), "%s%0*d;", cmd->cat_cmd,
-                     cmd->value_digits, cmd->value_min);
-        } else {
-            snprintf(buf, sizeof(buf), "%s;", cmd->cat_cmd);
-        }
-        cat_client_send(buf);
-        notify_cat(control_name, cmd, buf);
-        ESP_LOGI(TAG, "CMD [%s] -> %s", cmd->name, buf);
-        // Re-query step after ZZSU/ZZSD so local step stays in sync
-        if (strcmp(cmd->cat_cmd, "ZZSU") == 0 || strcmp(cmd->cat_cmd, "ZZSD") == 0) {
-            cat_client_send("ZZAC;");
-        }
-        break;
-
-    case CMD_CAT_TOGGLE: {
-        if (ctrl_type == DJ_CTRL_BUTTON && new_val == 0) return;
-        bool *state = find_toggle(cmd->id, cmd->cat_cmd);
-        if (!state) return;
-        *state = !(*state);
-        snprintf(buf, sizeof(buf), "%s%0*d;", cmd->cat_cmd,
-                 cmd->value_digits, *state ? cmd->value_max : cmd->value_min);
-        cat_client_send(buf);
-        notify_cat(control_name, cmd, buf);
-        ESP_LOGI(TAG, "TOGGLE [%s] -> %s (state=%d)", cmd->name, buf, *state);
-        break;
-    }
-
-    case CMD_CAT_SET: {
-        int val;
-        if (ctrl_type == DJ_CTRL_ENCODER) {
-            // Encoder: relative inc/dec, step = param (default 1)
-            int8_t delta = encoder_delta(old_val, new_val);
-            if (delta == 0) break;
-            int step = (param > 0) ? param : 1;
-            int32_t *tracked = find_set_value(cmd->id, cmd->value_min, cmd->value_max);
-            if (!tracked) break;
-            *tracked += delta * step;
-            if (*tracked > cmd->value_max) *tracked = cmd->value_max;
-            if (*tracked < cmd->value_min) *tracked = cmd->value_min;
-            val = *tracked;
-        } else {
-            // Knob/slider: scale 0-255 to value_min..value_max
-            int range = cmd->value_max - cmd->value_min;
-            val = cmd->value_min + (new_val * range) / 255;
-        }
-        snprintf(buf, sizeof(buf), "%s%0*d;", cmd->cat_cmd,
-                 cmd->value_digits, val);
-        cat_client_send(buf);
-        notify_cat(control_name, cmd, buf);
-        ESP_LOGD(TAG, "SET [%s] raw=%d -> val=%d -> %s", cmd->name, new_val, val, buf);
-        break;
-    }
-
-    case CMD_CAT_FREQ: {
-        // Read-modify-write VFO frequency (same logic as midi2cat ChangeFreqVfoA/B)
-        // Step from Thetis ZZAC, velocity-scaled by wheel speed
-        int8_t delta = 0;
-        if (ctrl_type == DJ_CTRL_ENCODER) {
-            delta = encoder_delta(old_val, new_val);
-        } else if (ctrl_type == DJ_CTRL_BUTTON) {
-            if (new_val == 0) return;
-            delta = (param > 0) ? 1 : -1;  // Button direction from param sign
-        } else {
-            delta = (new_val > old_val) ? 1 : -1;
-        }
-        if (delta == 0) break;
-
-        long *freq = NULL;
-        bool *synced_flag = NULL;
-        const char *vfo_label = "?";
-        if (strcmp(cmd->cat_cmd, "ZZFA") == 0) {
-            freq = &s_vfo_a_freq;
-            synced_flag = &s_vfo_a_synced;
-            vfo_label = "A";
-        } else if (strcmp(cmd->cat_cmd, "ZZFB") == 0) {
-            freq = &s_vfo_b_freq;
-            synced_flag = &s_vfo_b_synced;
-            vfo_label = "B";
-        }
-        if (!freq || !synced_flag) break;
-
-        // Check idle gap BEFORE velocity_multiplier() updates s_last_freq_tick_us
-        int64_t now_us = esp_timer_get_time();
-        int64_t gap = now_us - s_last_freq_tick_us;
-
-        ESP_LOGI(TAG, "VFO_DBG [%s] VFO_%s tick: delta=%d old=%d new=%d synced=%d "
-                 "cached_freq=%ld gap=%lld ms",
-                 cmd->name, vfo_label, delta, old_val, new_val,
-                 *synced_flag, *freq, gap / 1000);
-
-        if (!*synced_flag) {
-            ESP_LOGW(TAG, "VFO_DBG [%s] SKIPPED — VFO_%s not synced yet", cmd->name, vfo_label);
-            break;
-        }
-
-        // Re-sync from Thetis on first tick after idle (>1s gap).
-        // Catches band/freq changes made in Thetis UI. Skip this tick;
-        // response arrives before next tick so subsequent ticks use fresh data.
-        if (gap > 1000000) {  // >1 second since last FREQ tick
-            *synced_flag = false;
-            const char *query = (strcmp(cmd->cat_cmd, "ZZFA") == 0) ? "ZZFA;" : "ZZFB;";
-            cat_client_send(query);
-            ESP_LOGI(TAG, "VFO_DBG [%s] RE-SYNC: gap=%lld ms > 1s, sent %s "
-                     "invalidated VFO_%s (was %ld Hz)",
-                     cmd->name, gap / 1000, query, vfo_label, *freq);
-            // Update timestamp so velocity_multiplier starts fresh after resync
-            s_last_freq_tick_us = now_us;
-            break;
-        }
-
-        // Step: use Thetis step (from ZZAC), scaled by tick-rate velocity
-        int base_step = s_tune_step_hz;
-        int mult = velocity_multiplier();
-        int step_hz = base_step * mult;
-
-        long old_freq = *freq;
-        int direction = (delta > 0) ? 1 : -1;
-        *freq = snap_tune(*freq, step_hz, direction);
-        if (*freq < 100000) *freq = 100000;
-        if (*freq > 54000000) *freq = 54000000;
-        snprintf(buf, sizeof(buf), "%s%011ld;", cmd->cat_cmd, *freq);
-        cat_client_send(buf);
-        notify_cat(control_name, cmd, buf);
-        ESP_LOGI(TAG, "VFO_DBG [%s] TUNE: %ld -> %ld Hz (dir=%d step=%d x%d=%d) cmd='%s'",
-                 cmd->name, old_freq, *freq, direction, base_step, mult, step_hz, buf);
-        break;
-    }
-
-    case CMD_CAT_WHEEL: {
-        int8_t delta = 0;
-        if (ctrl_type == DJ_CTRL_ENCODER) {
-            delta = encoder_delta(old_val, new_val);
-        } else if (ctrl_type == DJ_CTRL_BUTTON) {
-            if (new_val == 0) return;
-            delta = 1;
-        }
-        // Send inc command for positive delta, dec for negative
-        const char *c = (delta > 0) ? cmd->cat_cmd : cmd->cat_cmd2;
-        if (!c) break;
-        int count = abs(delta);
-        if (count > 10) count = 10;  // Sanity limit
-        for (int i = 0; i < count; i++) {
-            snprintf(buf, sizeof(buf), "%s;", c);
-            cat_client_send(buf);
-        }
-        notify_cat(control_name, cmd, buf);
-        ESP_LOGD(TAG, "WHEEL [%s] delta=%d x%d", cmd->name, delta, count);
-        break;
-    }
-
-    case CMD_CAT_FILTER_WIDTH: {
-        ESP_LOGI(TAG, "FW_DBG [%s] tick: ctrl_type=%d old=%d new=%d, synced=%d, lo=%d hi=%d width=%d",
-                 control_name, ctrl_type, old_val, new_val, s_filter_synced,
-                 s_filter_lo, s_filter_hi, s_filter_width);
-        if (!s_filter_synced) {
-            cat_client_send("ZZFH;");
-            cat_client_send("ZZFL;");
-            ESP_LOGW(TAG, "FW_DBG [%s] NOT SYNCED — querying ZZFH/ZZFL, skipping tick", cmd->name);
-            break;
-        }
-        int wmin = cmd->value_min > 0 ? cmd->value_min : 50;
-        int wmax = cmd->value_max > 0 ? cmd->value_max : 6000;
-        int step = (param > 0) ? param : 50;  // default 50 Hz per encoder tick
-        int width;
-
-        if (ctrl_type == DJ_CTRL_ENCODER) {
-            // Encoder: relative inc/dec of tracked width
-            int8_t delta = encoder_delta(old_val, new_val);
-            if (delta == 0) break;
-            // Initialize tracked width from current filter edges on first use
-            if (s_filter_width == 0) {
-                s_filter_width = s_filter_hi - s_filter_lo;
-                if (s_filter_width < wmin) s_filter_width = wmin;
-            }
-            s_filter_width += delta * step;
-            if (s_filter_width < wmin) s_filter_width = wmin;
-            if (s_filter_width > wmax) s_filter_width = wmax;
-            width = s_filter_width;
-        } else {
-            // Knob/slider: scale 0-255 to width range
-            width = wmin + (new_val * (wmax - wmin)) / 255;
-            s_filter_width = width;
-        }
-
-        int center = (s_filter_hi + s_filter_lo) / 2;
-        ESP_LOGI(TAG, "FW_DBG [%s] calc: wmin=%d wmax=%d step=%d raw_center=%d width=%d",
-                 cmd->name, wmin, wmax, step, center, width);
-        if (center < 0) center = -center;  // abs for LSB
-        // ZZSF takes center (4 digits) + width (4 digits) per Thetis CATCommands.cs
-        snprintf(buf, sizeof(buf), "ZZSF%04d%04d;", center, width);
-        ESP_LOGI(TAG, "FW_DBG [%s] result: center=%d width=%d CAT_CMD='%s'",
-                 cmd->name, center, width, buf);
-        cat_client_send(buf);
-        // Update local tracking to reflect what Thetis will set
-        s_filter_lo = center - width / 2;
-        s_filter_hi = center + width / 2;
-        if (s_filter_lo < 0) s_filter_lo = 0;
-        notify_cat(control_name, cmd, buf);
-        break;
-    }
+    case CMD_CAT_BUTTON:       exec_button(cmd, control_name, ctrl_type, new_val); break;
+    case CMD_CAT_TOGGLE:       exec_toggle(cmd, control_name, ctrl_type, new_val); break;
+    case CMD_CAT_SET:          exec_set(cmd, control_name, ctrl_type, old_val, new_val, param); break;
+    case CMD_CAT_FREQ:         exec_freq(cmd, control_name, ctrl_type, old_val, new_val, param); break;
+    case CMD_CAT_WHEEL:        exec_wheel(cmd, control_name, ctrl_type, old_val, new_val); break;
+    case CMD_CAT_FILTER_WIDTH: exec_filter_width(cmd, control_name, ctrl_type, old_val, new_val, param); break;
     }
 }
 
@@ -840,18 +861,18 @@ void mapping_engine_on_cat_response(const char *cmd, const char *value)
     if (strcmp(cmd, "ZZFA") == 0) {
         long f = atol(value);
         ESP_LOGI(TAG, "VFO_DBG RESPONSE ZZFA: raw='%s' parsed=%ld (prev=%ld synced=%d)",
-                 value, f, s_vfo_a_freq, s_vfo_a_synced);
+                 value, f, s_vfo_a.freq, s_vfo_a.synced);
         if (f > 0) {
-            s_vfo_a_freq = f;
-            s_vfo_a_synced = true;
+            s_vfo_a.freq = f;
+            s_vfo_a.synced = true;
         }
     } else if (strcmp(cmd, "ZZFB") == 0) {
         long f = atol(value);
         ESP_LOGI(TAG, "VFO_DBG RESPONSE ZZFB: raw='%s' parsed=%ld (prev=%ld synced=%d)",
-                 value, f, s_vfo_b_freq, s_vfo_b_synced);
+                 value, f, s_vfo_b.freq, s_vfo_b.synced);
         if (f > 0) {
-            s_vfo_b_freq = f;
-            s_vfo_b_synced = true;
+            s_vfo_b.freq = f;
+            s_vfo_b.synced = true;
         }
     } else if (strcmp(cmd, "ZZAC") == 0) {
         int idx = atoi(value);
@@ -860,17 +881,17 @@ void mapping_engine_on_cat_response(const char *cmd, const char *value)
             ESP_LOGI(TAG, "Sync tune step = %d Hz (index %d)", s_tune_step_hz, idx);
         }
     } else if (strcmp(cmd, "ZZFH") == 0) {
-        s_filter_hi = atoi(value);
-        s_filter_synced = true;
-        s_filter_width = 0;  // reset so next tick re-derives from actual edges
+        s_filter.hi = atoi(value);
+        s_filter.synced = true;
+        s_filter.width = 0;  // reset so next tick re-derives from actual edges
         ESP_LOGI(TAG, "FW_DBG Sync ZZFH: filter_hi=%d raw='%s' (synced=%d, lo=%d)",
-                 s_filter_hi, value, s_filter_synced, s_filter_lo);
+                 s_filter.hi, value, s_filter.synced, s_filter.lo);
     } else if (strcmp(cmd, "ZZFL") == 0) {
-        s_filter_lo = atoi(value);
-        s_filter_synced = true;
-        s_filter_width = 0;  // reset so next tick re-derives from actual edges
+        s_filter.lo = atoi(value);
+        s_filter.synced = true;
+        s_filter.width = 0;  // reset so next tick re-derives from actual edges
         ESP_LOGI(TAG, "FW_DBG Sync ZZFL: filter_lo=%d raw='%s' (synced=%d, hi=%d)",
-                 s_filter_lo, value, s_filter_synced, s_filter_hi);
+                 s_filter.lo, value, s_filter.synced, s_filter.hi);
     }
 
     // Generic toggle sync: if response matches a tracked toggle, update state + LED
@@ -900,9 +921,9 @@ void mapping_engine_on_cat_response(const char *cmd, const char *value)
 void mapping_engine_request_sync(void)
 {
     ESP_LOGI(TAG, "Requesting VFO/step/filter/toggle sync from Thetis");
-    s_vfo_a_synced = false;
-    s_vfo_b_synced = false;
-    s_filter_synced = false;
+    s_vfo_a.synced = false;
+    s_vfo_b.synced = false;
+    s_filter.synced = false;
     cat_client_send("ZZFA;");
     cat_client_send("ZZFB;");
     // Set tuning step to 10 Hz (index 2), then query back to confirm
