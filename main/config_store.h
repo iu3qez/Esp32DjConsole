@@ -48,18 +48,3 @@ esp_err_t config_get_u8(const char *key, uint8_t *out);
  */
 esp_err_t config_set_u8(const char *key, uint8_t value);
 
-/**
- * Get a large blob (for JSON mappings). Caller must free the returned buffer.
- * Returns NULL if key doesn't exist.
- */
-char *config_get_blob(const char *key, size_t *out_len);
-
-/**
- * Set a large blob (for JSON mappings).
- */
-esp_err_t config_set_blob(const char *key, const char *data, size_t len);
-
-/**
- * Erase a key from NVS.
- */
-esp_err_t config_erase_key(const char *key);
