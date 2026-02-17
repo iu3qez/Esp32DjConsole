@@ -17,6 +17,7 @@
 #define CFG_KEY_CAT_HOST     "cat_host"
 #define CFG_KEY_CAT_PORT     "cat_port"
 #define CFG_KEY_DEBUG_LEVEL  "debug_lvl"
+#define CFG_KEY_MAPPINGS     "mappings"
 
 /**
  * Get a string value from NVS. Returns ESP_ERR_NOT_FOUND if key doesn't exist.
