@@ -554,32 +554,31 @@ static esp_err_t api_mappings_reset_handler(httpd_req_t *req)
 
 static esp_err_t api_mappings_download_handler(httpd_req_t *req)
 {
-    struct stat st;
-    if (stat("/www/mappings.json", &st) != 0) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No mappings file");
-        return ESP_FAIL;
+    int count = 0;
+    const mapping_entry_t *table = mapping_engine_get_table(&count);
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < count; i++) {
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddStringToObject(entry, "c", table[i].control_name);
+        cJSON_AddNumberToObject(entry, "id", table[i].command_id);
+        if (table[i].param != 0) {
+            cJSON_AddNumberToObject(entry, "p", table[i].param);
+        }
+        cJSON_AddItemToArray(arr, entry);
     }
 
-    FILE *f = fopen("/www/mappings.json", "r");
-    if (!f) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open file");
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_FAIL;
     }
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"mappings.json\"");
-
-    char buf[512];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) {
-            fclose(f);
-            httpd_resp_send_chunk(req, NULL, 0);
-            return ESP_FAIL;
-        }
-    }
-    fclose(f);
-    httpd_resp_send_chunk(req, NULL, 0);
+    httpd_resp_sendstr(req, json);
+    free(json);
     return ESP_OK;
 }
 
@@ -619,24 +618,37 @@ static esp_err_t api_mappings_upload_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON array");
         return ESP_FAIL;
     }
-    cJSON_Delete(arr);
 
-    // Write to SPIFFS
-    FILE *f = fopen("/www/mappings.json", "w");
-    if (!f) {
-        free(buf);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to write file");
-        return ESP_FAIL;
+    // Reset to defaults then overlay uploaded mappings
+    mapping_engine_reset_defaults();
+
+    int applied = 0;
+    cJSON *item;
+    cJSON_ArrayForEach(item, arr) {
+        cJSON *c = cJSON_GetObjectItem(item, "c");
+        cJSON *id = cJSON_GetObjectItem(item, "id");
+        if (!c || !cJSON_IsString(c) || !id || !cJSON_IsNumber(id)) continue;
+
+        mapping_entry_t entry = {0};
+        strncpy(entry.control_name, c->valuestring, sizeof(entry.control_name) - 1);
+        entry.command_id = (uint16_t)id->valuedouble;
+
+        cJSON *p = cJSON_GetObjectItem(item, "p");
+        if (p && cJSON_IsNumber(p)) entry.param = (int32_t)p->valuedouble;
+
+        if (cmd_db_find(entry.command_id) && mapping_engine_set(&entry) == ESP_OK) {
+            applied++;
+        }
     }
-    fwrite(buf, 1, total_len, f);
-    fclose(f);
+
+    cJSON_Delete(arr);
     free(buf);
 
-    // Reload mappings from the file
-    mapping_engine_load();
+    // Save to NVS
+    esp_err_t save_ret = mapping_engine_save();
 
     cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddBoolToObject(resp, "ok", save_ret == ESP_OK);
     int count = 0;
     mapping_engine_get_table(&count);
     cJSON_AddNumberToObject(resp, "loaded", count);
@@ -907,12 +919,6 @@ static esp_err_t static_file_handler_internal(httpd_req_t *req)
         snprintf(filepath, sizeof(filepath), "/www/index.html");
     } else {
         snprintf(filepath, sizeof(filepath), "/www%.*s", (int)uri_len, uri);
-    }
-
-    // Don't serve mappings.json as a static file (API handles it)
-    if (strcmp(filepath, "/www/mappings.json") == 0) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Use /api/mappings");
-        return ESP_FAIL;
     }
 
     struct stat st;

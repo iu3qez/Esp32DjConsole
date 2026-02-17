@@ -1,11 +1,11 @@
 #include "mapping_engine.h"
 #include "cat_client.h"
+#include "config_store.h"
 #include "dj_led.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "cJSON.h"
@@ -121,7 +121,7 @@ static int32_t *find_set_value(uint16_t cmd_id, int value_min, int value_max)
 #define VELOCITY_FAST_US   50000  // <= 50ms between ticks = 10x (fast turning)
 static int64_t s_last_freq_tick_us = 0;  // timestamp of last encoder tick
 
-#define MAPPINGS_PATH "/www/mappings.json"
+// Mappings stored in NVS (survives firmware flash, unlike SPIFFS)
 
 // ===================================================================
 // Learn mode state
@@ -553,7 +553,7 @@ void mapping_engine_reset_defaults(void)
 }
 
 // ===================================================================
-// SPIFFS persistence
+// NVS persistence (survives firmware flash, unlike SPIFFS www partition)
 // ===================================================================
 
 esp_err_t mapping_engine_save(void)
@@ -570,62 +570,39 @@ esp_err_t mapping_engine_save(void)
             cJSON_AddNumberToObject(obj, "p", e->param);
         }
         cJSON_AddItemToArray(arr, obj);
-        // Debug: log filter width entries specifically
-        const thetis_cmd_t *dbcmd = cmd_db_find(e->command_id);
-        if (dbcmd && dbcmd->exec_type == CMD_CAT_FILTER_WIDTH) {
-            ESP_LOGI(TAG, "FW_DBG SAVE: '%s' -> cmd_id=%d (%s) param=%d",
-                     e->control_name, e->command_id, dbcmd->name, (int)e->param);
-        }
     }
 
     char *json = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     if (!json) return ESP_ERR_NO_MEM;
 
-    FILE *f = fopen(MAPPINGS_PATH, "w");
-    if (!f) {
-        ESP_LOGE(TAG, "Failed to open %s for writing", MAPPINGS_PATH);
-        free(json);
-        return ESP_FAIL;
-    }
-
     size_t len = strlen(json);
-    size_t written = fwrite(json, 1, len, f);
-    fclose(f);
+    esp_err_t ret = config_set_blob(CFG_KEY_MAPPINGS, json, len);
     free(json);
 
-    if (written != len) {
-        ESP_LOGE(TAG, "Short write to %s (%d/%d)", MAPPINGS_PATH, (int)written, (int)len);
-        return ESP_FAIL;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Saved %d mappings to NVS (%d bytes)", s_mapping_count, (int)len);
+    } else {
+        ESP_LOGE(TAG, "Failed to save mappings to NVS: %s", esp_err_to_name(ret));
     }
-
-    ESP_LOGI(TAG, "Saved %d mappings to %s (%d bytes)", s_mapping_count, MAPPINGS_PATH, (int)len);
-    return ESP_OK;
+    return ret;
 }
 
 esp_err_t mapping_engine_load(void)
 {
-    struct stat st;
-    if (stat(MAPPINGS_PATH, &st) != 0) {
-        ESP_LOGI(TAG, "No user mappings file at %s", MAPPINGS_PATH);
+    size_t len = 0;
+    char *json = config_get_blob(CFG_KEY_MAPPINGS, &len);
+    if (!json || len == 0) {
+        ESP_LOGI(TAG, "No user mappings in NVS");
+        if (json) free(json);
         return ESP_ERR_NOT_FOUND;
     }
-
-    FILE *f = fopen(MAPPINGS_PATH, "r");
-    if (!f) return ESP_FAIL;
-
-    char *json = malloc(st.st_size + 1);
-    if (!json) { fclose(f); return ESP_ERR_NO_MEM; }
-
-    size_t read_len = fread(json, 1, st.st_size, f);
-    fclose(f);
-    json[read_len] = '\0';
 
     cJSON *arr = cJSON_Parse(json);
     free(json);
     if (!arr || !cJSON_IsArray(arr)) {
         if (arr) cJSON_Delete(arr);
-        ESP_LOGW(TAG, "Invalid JSON in %s", MAPPINGS_PATH);
+        ESP_LOGW(TAG, "Invalid JSON in NVS mappings blob");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -651,18 +628,13 @@ esp_err_t mapping_engine_load(void)
             strncpy(entry.control_name, c->valuestring, sizeof(entry.control_name) - 1);
             entry.command_id = cmd_id;
             entry.param = (p && cJSON_IsNumber(p)) ? (int32_t)p->valuedouble : 0;
-            // Debug: log filter width entries specifically
-            if (dbcmd->exec_type == CMD_CAT_FILTER_WIDTH) {
-                ESP_LOGI(TAG, "FW_DBG LOAD: '%s' -> cmd_id=%d (%s) param=%d",
-                         entry.control_name, entry.command_id, dbcmd->name, (int)entry.param);
-            }
             mapping_engine_set(&entry);  // Overwrites existing or appends
             user_count++;
         }
     }
 
     cJSON_Delete(arr);
-    ESP_LOGI(TAG, "Overlaid %d user mappings from %s (total %d)", user_count, MAPPINGS_PATH, s_mapping_count);
+    ESP_LOGI(TAG, "Overlaid %d user mappings from NVS (total %d)", user_count, s_mapping_count);
     return ESP_OK;
 }
 
