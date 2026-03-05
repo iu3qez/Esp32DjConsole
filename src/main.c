@@ -13,6 +13,7 @@
 #include "event_engine.h"
 #include "usb_dj_host.h"
 #include "wifi_manager.h"
+#include "http_server.h"
 
 static const char *TAG = "midi_bridge";
 
@@ -175,6 +176,9 @@ void app_main(void) {
 
     // WiFi (STA or AP fallback)
     wifi_manager_init();
+
+    // HTTP server (REST API + WebSocket + static files)
+    http_server_init();
 
     xTaskCreate(usb_init_task, "usb_init", 16384, NULL, 5, NULL);
 }

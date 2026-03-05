@@ -13,3 +13,6 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_p4.csv"
 
 # WiFi via ESP32-C6 companion chip on P4 Function EV board
 CONFIG_ESP_HOST_WIFI_ENABLED=y
+
+# HTTP server WebSocket support
+CONFIG_HTTPD_WS_SUPPORT=y
