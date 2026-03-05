@@ -134,17 +134,6 @@ void tud_resume_cb(void) {
 }
 
 //--------------------------------------------------------------------+
-// Host callbacks (stubs for now)
-//--------------------------------------------------------------------+
-void tuh_mount_cb(uint8_t daddr) {
-    ESP_LOGI(TAG, "Host: device %u mounted", daddr);
-}
-
-void tuh_umount_cb(uint8_t daddr) {
-    ESP_LOGI(TAG, "Host: device %u unmounted", daddr);
-}
-
-//--------------------------------------------------------------------+
 // app_main
 //--------------------------------------------------------------------+
 void app_main(void) {
