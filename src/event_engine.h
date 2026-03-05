@@ -19,6 +19,7 @@ typedef struct {
     uint8_t midi_channel;
     uint8_t midi_type;      // MIDI_CC, MIDI_NOTE_ON, etc.
     uint8_t midi_param;     // CC number or note number
+    float   scale;          // multiplier applied to CC value, default 0.5
 } midi_mapping_t;
 
 #define MAX_MIDI_MAPPINGS 64
