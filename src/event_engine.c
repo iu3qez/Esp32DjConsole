@@ -145,8 +145,39 @@ esp_err_t event_engine_load(void) {
         return ESP_ERR_NOT_FOUND;
     }
 
-    size_t blob_size = count * sizeof(midi_mapping_t);
-    err = nvs_get_blob(nvs, "mappings", s_mappings, &blob_size);
+    size_t blob_size = 0;
+    err = nvs_get_blob(nvs, "mappings", NULL, &blob_size);
+    if (err != ESP_OK) {
+        nvs_close(nvs);
+        return err;
+    }
+
+    size_t new_size = count * sizeof(midi_mapping_t);
+    size_t old_entry_size = 4;
+    size_t old_size = count * old_entry_size;
+
+    if (blob_size == new_size) {
+        err = nvs_get_blob(nvs, "mappings", s_mappings, &blob_size);
+    } else if (blob_size == old_size) {
+        ESP_LOGI(TAG, "Migrating %d mappings from old format", count);
+        uint8_t old_buf[MAX_MIDI_MAPPINGS * 4];
+        size_t read_size = old_size;
+        err = nvs_get_blob(nvs, "mappings", old_buf, &read_size);
+        if (err == ESP_OK) {
+            for (int i = 0; i < count; i++) {
+                s_mappings[i].control_id   = old_buf[i * 4 + 0];
+                s_mappings[i].midi_channel = old_buf[i * 4 + 1];
+                s_mappings[i].midi_type    = old_buf[i * 4 + 2];
+                s_mappings[i].midi_param   = old_buf[i * 4 + 3];
+                s_mappings[i].scale        = 0.5f;
+            }
+        }
+    } else {
+        ESP_LOGW(TAG, "Unknown blob size %d for %d entries, loading defaults", blob_size, count);
+        nvs_close(nvs);
+        return ESP_ERR_NOT_FOUND;
+    }
+
     nvs_close(nvs);
 
     if (err == ESP_OK) {
