@@ -3,15 +3,36 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
 #include "tusb.h"
 #include "host/hcd.h"
 #include "esp_private/usb_phy.h"
 #include "soc/lp_system_struct.h"
 
+#include "midi_output.h"
+#include "event_engine.h"
+#include "usb_dj_host.h"
+#include "wifi_manager.h"
+
 static const char *TAG = "midi_bridge";
 
 static usb_phy_handle_t fs_phy_hdl;
 static usb_phy_handle_t hs_phy_hdl;
+
+//--------------------------------------------------------------------+
+// DJ control callback -> event engine
+//--------------------------------------------------------------------+
+static void on_dj_control(const char *name, dj_control_type_t type,
+                           uint8_t index, uint8_t old_val, uint8_t new_val) {
+    control_event_t evt = {
+        .control_id = index,
+        .type = (control_type_t)type,
+        .value = (type == DJ_CTRL_ENCODER)
+                 ? (int16_t)(int8_t)(new_val - old_val)
+                 : new_val,
+    };
+    event_engine_process(&evt);
+}
 
 //--------------------------------------------------------------------+
 // PHY Initialization for ESP32-P4 dual USB
@@ -103,6 +124,12 @@ static void usb_init_task(void *arg) {
     }
     ESP_LOGI(TAG, "TinyUSB host initialized on rhport 1 (HS)");
 
+    // Init application modules
+    midi_output_init();
+    event_engine_init();
+    usb_dj_host_init(on_dj_control);
+
+    // Start USB tasks pinned to CPU 1
     xTaskCreatePinnedToCore(tusb_device_task, "usbd", 4096, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(tusb_host_task, "usbh", 4096, NULL, 5, NULL, 1);
 
@@ -116,7 +143,7 @@ static void usb_init_task(void *arg) {
 }
 
 //--------------------------------------------------------------------+
-// Device callbacks (stubs for now)
+// Device callbacks
 //--------------------------------------------------------------------+
 void tud_mount_cb(void) {
     ESP_LOGI(TAG, "MIDI device mounted");
@@ -138,5 +165,16 @@ void tud_resume_cb(void) {
 //--------------------------------------------------------------------+
 void app_main(void) {
     ESP_LOGI(TAG, "=== ESP32-P4 MIDI Bridge ===");
+
+    // NVS init (needed for event engine mappings persistence)
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+
+    // WiFi (STA or AP fallback)
+    wifi_manager_init();
+
     xTaskCreate(usb_init_task, "usb_init", 16384, NULL, 5, NULL);
 }
