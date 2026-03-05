@@ -69,9 +69,10 @@ void event_engine_process(const control_event_t *event) {
             break;
 
         case MIDI_CC: {
-            // Scale 0-255 to 0-127 (same as sample.ino: newState / 2)
-            uint8_t cc_val = (uint8_t)(event->value / 2);
-            midi_output_send_cc(m->midi_channel, m->midi_param, cc_val);
+            int scaled = (int)(event->value * m->scale);
+            if (scaled < 0) scaled = 0;
+            if (scaled > 127) scaled = 127;
+            midi_output_send_cc(m->midi_channel, m->midi_param, (uint8_t)scaled);
             break;
         }
 
