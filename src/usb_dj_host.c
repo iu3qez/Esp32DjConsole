@@ -178,7 +178,9 @@ static void process_state_update(void) {
 
 static void bulk_in_cb(tuh_xfer_t *xfer) {
     if (xfer->result == XFER_RESULT_SUCCESS && xfer->actual_len >= DJ_STATE_SIZE) {
-        memcpy(s_current_state, xfer->buffer, DJ_STATE_SIZE);
+        // NOTE: xfer->buffer is NULL due to TinyUSB not preserving it in ep_callback
+        // (upstream limitation in usbh.c since ba1185bf2). Use our static buffer directly.
+        memcpy(s_current_state, s_bulk_buf, DJ_STATE_SIZE);
         process_state_update();
     } else if (xfer->result != XFER_RESULT_SUCCESS) {
         ESP_LOGE(TAG, "Bulk IN error: result=%d", xfer->result);

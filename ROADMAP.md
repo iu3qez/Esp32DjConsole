@@ -5,6 +5,8 @@
 _No current goal. Next planned item will be promoted on next planning session._
 
 ## Completed
+- [x] Fix stream buffer assertion when multiple routes share a source port (2026-02-21) `0e04ee6`
+- [x] Move mapping persistence from SPIFFS to NVS to survive firmware flash (2026-02-17) `b4171fe`
 - [x] Add live CAT command ticker bar showing TX/RX commands (2026-02-15) `653ed7f`
 - [x] Add VFO idle-resync to prevent band jumps after Thetis frequency changes (2026-02-15) `eb47f80`
 - [x] Fix ZZSF format, encoder filter width, and mapping persistence (2026-02-15) `2059918`

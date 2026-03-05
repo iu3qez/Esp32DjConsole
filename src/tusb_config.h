@@ -10,7 +10,7 @@
 //--------------------------------------------------------------------
 
 #ifndef CFG_TUSB_DEBUG
-#define CFG_TUSB_DEBUG        2
+#define CFG_TUSB_DEBUG        0
 #endif
 
 // Device on rhport 0 (FS) — MIDI class
