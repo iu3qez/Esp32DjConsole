@@ -250,6 +250,7 @@ static esp_err_t api_mappings_get_handler(httpd_req_t *req) {
         cJSON_AddNumberToObject(entry, "channel", table[i].midi_channel);
         cJSON_AddNumberToObject(entry, "type", table[i].midi_type);
         cJSON_AddNumberToObject(entry, "param", table[i].midi_param);
+        cJSON_AddNumberToObject(entry, "scale", table[i].scale);
         cJSON_AddItemToArray(arr, entry);
     }
 
@@ -300,6 +301,7 @@ static esp_err_t api_mappings_put_handler(httpd_req_t *req) {
         cJSON *ch  = cJSON_GetObjectItem(item, "channel");
         cJSON *ty  = cJSON_GetObjectItem(item, "type");
         cJSON *pm  = cJSON_GetObjectItem(item, "param");
+        cJSON *sc  = cJSON_GetObjectItem(item, "scale");
         if (!cid || !ch || !ty || !pm) continue;
 
         midi_mapping_t m = {
@@ -307,6 +309,7 @@ static esp_err_t api_mappings_put_handler(httpd_req_t *req) {
             .midi_channel = (uint8_t)ch->valueint,
             .midi_type    = (uint8_t)ty->valueint,
             .midi_param   = (uint8_t)pm->valueint,
+            .scale        = (sc && cJSON_IsNumber(sc)) ? (float)sc->valuedouble : 0.5f,
         };
         if (event_engine_set_mapping(&m) == ESP_OK) applied++;
     }
