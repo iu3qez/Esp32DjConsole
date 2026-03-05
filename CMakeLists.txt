@@ -1,21 +1,32 @@
-# ESP-IDF top-level project CMakeLists.txt
 cmake_minimum_required(VERSION 3.16)
 
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(esp32_dj_console)
+set(IDF_TARGET "esp32p4")
 
-# Auto-build frontend with npm
-set(FRONTEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/frontend)
-set(FRONTEND_BUILD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/build/www)
+# TinyUSB fork (adjust path as needed)
+set(TUSB_ROOT ${CMAKE_CURRENT_LIST_DIR}/../tinyusb)
+set(TUSB_BSP ${TUSB_ROOT}/hw/bsp/espressif)
 
-# Custom target to build frontend
-add_custom_target(frontend_build
-    COMMAND ${CMAKE_COMMAND} -E echo "Building frontend..."
-    COMMAND npm install --prefix ${FRONTEND_DIR}
-    COMMAND npm run build --prefix ${FRONTEND_DIR}
-    WORKING_DIRECTORY ${FRONTEND_DIR}
-    COMMENT "Building Svelte frontend"
+set(BOARD espressif_p4_function_ev)
+include(${TUSB_BSP}/boards/${BOARD}/board.cmake)
+
+# RHPort: port 0 = FS device (MIDI), port 1 = HS host (DJ Console)
+set(RHPORT_DEVICE 0)
+set(RHPORT_DEVICE_SPEED OPT_MODE_FULL_SPEED)
+set(RHPORT_HOST 1)
+set(RHPORT_HOST_SPEED OPT_MODE_HIGH_SPEED)
+
+set(EXTRA_COMPONENT_DIRS
+  "src"
+  "${TUSB_BSP}/boards"
+  "${TUSB_BSP}/components"
 )
 
-# Generate SPIFFS image from frontend build output for the 'www' partition.
-spiffs_create_partition_image(www ${FRONTEND_BUILD_DIR} FLASH_IN_PROJECT DEPENDS frontend_build)
+# Exclude the S3 main/ component (it stays on the master branch)
+set(EXCLUDE_COMPONENTS "main")
+
+# sdkconfig
+set(SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults.esp32p4")
+set(SDKCONFIG ${CMAKE_BINARY_DIR}/sdkconfig)
+
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(esp32p4_midi_bridge)
