@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { getCommands, getMappings, resetMappings, downloadMappings, uploadMappings, clearMapping } from '../lib/api.js';
+  import { getCommands, getMappings, putMappings, resetMappings, downloadMappings, uploadMappings } from '../lib/api.js';
   import { subscribe as wsSub, send as wsSend } from '../lib/ws.js';
   import { success, error } from '../lib/toast.js';
   import ConfirmDialog from '../lib/ConfirmDialog.svelte';
@@ -45,21 +45,14 @@
     return [...cats].sort();
   }
 
-  // Find which control is mapped to a command
-  function mappedControl(cmdId) {
-    const m = mappings.find(m => m.id === cmdId);
-    return m ? m.c : null;
-  }
-
-  // Count mapped controls
-  function mappedCount() {
-    return mappings.length;
-  }
 
   async function loadData() {
     try {
-      [commands, mappings] = await Promise.all([getCommands(), getMappings()]);
+      mappings = await getMappings();
     } catch (e) { error('Failed to load: ' + e.message); }
+    try {
+      commands = await getCommands();
+    } catch (e) { /* commands API may not exist yet */ }
   }
 
   // Learn mode
@@ -138,12 +131,12 @@
     e.target.value = '';
   }
 
-  async function doClear(controlName) {
+
+  async function saveScale(idx) {
     try {
-      await clearMapping(controlName);
-      mappings = await getMappings();
-      success(`Cleared ${controlName}`);
-    } catch (e) { error('Clear failed: ' + e.message); }
+      await putMappings([mappings[idx]]);
+      success(`Scale updated for control ${mappings[idx].control_id}`);
+    } catch (e) { error('Save failed: ' + e.message); }
   }
 </script>
 
@@ -198,9 +191,6 @@
           <div class="cmd-row">
             <span class="cmd-name" title={cmd.desc || cmd.name}>{cmd.name}</span>
             <span class="cmd-type">{EXEC_LABELS[cmd.exec] || '?'}</span>
-            {#if mappedControl(cmd.id)}
-              <span class="cmd-mapped">{mappedControl(cmd.id)}</span>
-            {/if}
             <button class="assign-btn" onclick={() => startLearn(cmd)} disabled={learning}>
               Assign
             </button>
@@ -213,20 +203,33 @@
 
 <!-- Active Mappings -->
 <section class="panel">
-  <h2>Active Mappings <span class="count">({mappedCount()} controls mapped)</span></h2>
+  <h2>Active Mappings <span class="count">({mappings.length} controls)</span></h2>
   {#if mappings.length === 0}
-    <p class="empty">No mappings configured. Use "Assign" above to create mappings.</p>
+    <p class="empty">No mappings configured.</p>
   {:else}
     <div class="mapping-list">
-      {#each mappings as m}
+      <div class="map-header">
+        <span class="col-id">ID</span>
+        <span class="col-ch">Ch</span>
+        <span class="col-type">Type</span>
+        <span class="col-param">Param</span>
+        <span class="col-scale">Scale</span>
+      </div>
+      {#each mappings as m, idx}
         <div class="map-row">
-          <span class="map-ctrl">{m.c}</span>
-          <span class="map-arrow">&rarr;</span>
-          <span class="map-cmd">{m.name || `CMD #${m.id}`}</span>
-          {#if m.p}
-            <span class="map-param">({m.p})</span>
-          {/if}
-          <button class="clear-btn" onclick={() => doClear(m.c)}>Clear</button>
+          <span class="col-id">{m.control_id}</span>
+          <span class="col-ch">{m.channel}</span>
+          <span class="col-type">{m.type === 0xB0 ? 'CC' : m.type === 0x90 ? 'Note' : '?'}</span>
+          <span class="col-param">{m.param}</span>
+          <span class="col-scale">
+            {#if m.type === 0xB0}
+              <input type="number" step="0.01" min="0" max="2"
+                bind:value={m.scale}
+                onchange={() => saveScale(idx)} />
+            {:else}
+              <span class="na">--</span>
+            {/if}
+          </span>
         </div>
       {/each}
     </div>
@@ -286,11 +289,6 @@
     font-size: 0.75rem; color: #7a8aa8; background: #0f0f1a;
     padding: 2px 8px; border-radius: 4px; border: 1px solid #1a3a6a;
   }
-  .cmd-mapped {
-    font-size: 0.75rem; color: #52b788; background: #162e1a;
-    padding: 2px 8px; border-radius: 4px; font-family: monospace;
-    border: 1px solid #2d6a4f44;
-  }
   .assign-btn {
     padding: 4px 12px; border: none; background: #1a4a8a;
     color: #e0e0e0; border-radius: 4px; cursor: pointer; font-size: 0.8rem;
@@ -308,16 +306,24 @@
     transition: border-color 0.2s;
   }
   .map-row:hover { border-color: #1a3a6a; }
-  .map-ctrl { font-family: monospace; color: #e94560; font-size: 0.85rem; min-width: 7rem; font-weight: 500; }
-  .map-arrow { color: #7a8aa8; }
-  .map-cmd { flex: 1; font-size: 0.85rem; }
-  .map-param { color: #7a8aa8; font-size: 0.8rem; }
-  .clear-btn {
-    padding: 3px 8px; border: none; background: transparent;
-    color: #9ca3af; border-radius: 4px; cursor: pointer; font-size: 0.8rem;
-    transition: color 0.2s, background 0.2s;
+  .map-header {
+    display: flex; gap: 0.5rem; padding: 0.4rem 0.5rem;
+    font-size: 0.75rem; font-weight: 600; color: #7a8aa8;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    border-bottom: 1px solid #1a3a6a44;
   }
-  .clear-btn:hover { color: #e94560; background: rgba(233,69,96,0.1); }
+  .col-id { width: 3rem; }
+  .col-ch { width: 2.5rem; }
+  .col-type { width: 4rem; }
+  .col-param { width: 4rem; }
+  .col-scale { flex: 1; }
+  .col-scale input {
+    width: 5rem; padding: 0.3rem 0.4rem; background: #0f0f1a;
+    border: 1px solid #1a3a6a; color: #e0e0e0; border-radius: 4px;
+    font-size: 0.85rem;
+  }
+  .col-scale input:focus { border-color: #e94560; outline: none; }
+  .col-scale .na { color: #4a5568; }
 
   .empty { color: #7a8aa8; font-style: italic; font-size: 0.85rem; }
 
