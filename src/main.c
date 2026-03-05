@@ -28,9 +28,7 @@ static void on_dj_control(const char *name, dj_control_type_t type,
     control_event_t evt = {
         .control_id = index,
         .type = (control_type_t)type,
-        .value = (type == DJ_CTRL_ENCODER)
-                 ? (int16_t)(int8_t)(new_val - old_val)
-                 : new_val,
+        .value = new_val,
     };
     event_engine_process(&evt);
 }

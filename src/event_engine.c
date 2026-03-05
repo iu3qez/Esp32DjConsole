@@ -10,11 +10,14 @@ static const char *TAG = "event_eng";
 static midi_mapping_t s_mappings[MAX_MIDI_MAPPINGS];
 static int s_mapping_count = 0;
 
-// Default mappings: buttons -> Note On/Off, sliders -> CC, encoders -> CC relative
+// Default mappings matching sample.ino convention:
+// Buttons (0-45) -> Note On/Off with note = controlIndex
+// Dials/Sliders/Encoders (46-58) -> CC with cc_num = controlIndex
+// All on MIDI channel 1 (index 0)
 static void load_defaults(void) {
     s_mapping_count = 0;
 
-    // Map first 46 controls (buttons) as notes on channel 0
+    // Buttons -> Note On/Off, note number = control index
     for (uint8_t i = 0; i < 46 && s_mapping_count < MAX_MIDI_MAPPINGS; i++) {
         s_mappings[s_mapping_count++] = (midi_mapping_t){
             .control_id   = i,
@@ -24,23 +27,13 @@ static void load_defaults(void) {
         };
     }
 
-    // Map controls 46-54 (sliders/dials) as CC on channel 0
-    for (uint8_t i = 46; i < 55 && s_mapping_count < MAX_MIDI_MAPPINGS; i++) {
+    // Dials, sliders, encoders -> CC, cc number = control index
+    for (uint8_t i = 46; i < 59 && s_mapping_count < MAX_MIDI_MAPPINGS; i++) {
         s_mappings[s_mapping_count++] = (midi_mapping_t){
             .control_id   = i,
             .midi_channel = 0,
             .midi_type    = MIDI_CC,
-            .midi_param   = (uint8_t)(i - 46 + 14),  // CC14-CC22
-        };
-    }
-
-    // Map controls 55-58 (encoders) as CC on channel 0
-    for (uint8_t i = 55; i < 59 && s_mapping_count < MAX_MIDI_MAPPINGS; i++) {
-        s_mappings[s_mapping_count++] = (midi_mapping_t){
-            .control_id   = i,
-            .midi_channel = 0,
-            .midi_type    = MIDI_CC,
-            .midi_param   = (uint8_t)(i - 55 + 24),  // CC24-CC27
+            .midi_param   = i,
         };
     }
 
@@ -73,26 +66,12 @@ void event_engine_process(const control_event_t *event) {
             }
             break;
 
-        case MIDI_CC:
-            if (event->type == CTRL_SLIDER) {
-                // Scale 0-255 to 0-127
-                uint8_t cc_val = (uint8_t)(event->value >> 1);
-                midi_output_send_cc(m->midi_channel, m->midi_param, cc_val);
-            } else if (event->type == CTRL_ENCODER) {
-                // Relative: positive = 0x01-0x3F, negative = 0x41-0x7F
-                int16_t delta = event->value;
-                uint8_t cc_val;
-                if (delta > 0) {
-                    cc_val = (uint8_t)(delta > 63 ? 63 : delta);
-                } else {
-                    cc_val = (uint8_t)(64 + (-delta > 63 ? 63 : -delta));
-                }
-                midi_output_send_cc(m->midi_channel, m->midi_param, cc_val);
-            } else if (event->type == CTRL_BUTTON) {
-                // Button as CC toggle: 127 on press, 0 on release
-                midi_output_send_cc(m->midi_channel, m->midi_param, event->value ? 127 : 0);
-            }
+        case MIDI_CC: {
+            // Scale 0-255 to 0-127 (same as sample.ino: newState / 2)
+            uint8_t cc_val = (uint8_t)(event->value / 2);
+            midi_output_send_cc(m->midi_channel, m->midi_param, cc_val);
             break;
+        }
 
         default:
             break;
