@@ -24,6 +24,7 @@ static void load_defaults(void) {
             .midi_channel = 0,
             .midi_type    = MIDI_NOTE_ON,
             .midi_param   = i,
+            .scale        = 1.0f,
         };
     }
 
@@ -34,6 +35,7 @@ static void load_defaults(void) {
             .midi_channel = 0,
             .midi_type    = MIDI_CC,
             .midi_param   = i,
+            .scale        = 0.5f,
         };
     }
 
