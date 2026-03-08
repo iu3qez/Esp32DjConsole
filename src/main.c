@@ -10,6 +10,7 @@
 #include "soc/lp_system_struct.h"
 
 #include "midi_output.h"
+#include "midi_input.h"
 #include "event_engine.h"
 #include "usb_dj_host.h"
 #include "wifi_manager.h"
@@ -78,6 +79,7 @@ static void tusb_device_task(void *arg) {
     ESP_LOGI(TAG, "TinyUSB device task started");
     while (1) {
         tud_task_ext(1, false);
+        midi_input_poll();
     }
 }
 
@@ -125,6 +127,7 @@ static void usb_init_task(void *arg) {
 
     // Init application modules
     midi_output_init();
+    midi_input_init();
     event_engine_init();
     usb_dj_host_init(on_dj_control);
 
