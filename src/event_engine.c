@@ -69,10 +69,22 @@ void event_engine_process(const control_event_t *event) {
             break;
 
         case MIDI_CC: {
-            int scaled = (int)(event->value * m->scale);
-            if (scaled < 0) scaled = 0;
-            if (scaled > 127) scaled = 127;
-            midi_output_send_cc(m->midi_channel, m->midi_param, (uint8_t)scaled);
+            uint8_t cc_val;
+            if (event->type == CTRL_ENCODER) {
+                // Encoder: compute direction from delta
+                int diff = (int)event->value - (int)event->old_value;
+                if (diff > 127) diff -= 256;
+                if (diff < -128) diff += 256;
+                if (diff == 0) break;
+                cc_val = (diff > 0) ? 1 : 127;
+            } else {
+                // Dial/slider: scale raw value
+                int scaled = (int)(event->value * m->scale);
+                if (scaled < 0) scaled = 0;
+                if (scaled > 127) scaled = 127;
+                cc_val = (uint8_t)scaled;
+            }
+            midi_output_send_cc(m->midi_channel, m->midi_param, cc_val);
             break;
         }
 

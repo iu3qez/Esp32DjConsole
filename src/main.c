@@ -30,6 +30,7 @@ static void on_dj_control(const char *name, dj_control_type_t type,
         .control_id = index,
         .type = (control_type_t)type,
         .value = new_val,
+        .old_value = old_val,
     };
     event_engine_process(&evt);
 }

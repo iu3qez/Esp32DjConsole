@@ -12,6 +12,7 @@ typedef struct {
     uint8_t control_id;
     control_type_t type;
     int16_t value;
+    int16_t old_value;
 } control_event_t;
 
 typedef struct {
